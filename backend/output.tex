@@ -1,0 +1,80 @@
+\documentclass[10pt,a4paper]{article}
+
+% ========================= PACKAGES =========================
+\usepackage[a4paper, margin=0.25in, top=0.25in, bottom=0.25in]{geometry}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{fontawesome5}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+\usepackage{setspace}
+
+\usepackage[scaled=0.84]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\setstretch{0.95}
+
+% ========================= COLORS =========================
+\definecolor{sectionblue}{HTML}{D9E2F3}
+
+% ========================= CUSTOM COMMANDS =========================
+\newcommand{\cvsection}[1]{
+    \vspace{2pt} 
+    \noindent\colorbox{sectionblue}{\makebox[\dimexpr\textwidth-2\fboxsep\relax][c]{\textbf{\uppercase{#1}}}}\par
+    \vspace{2pt}
+}
+
+\begin{document}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{4pt}
+
+% ========================= HEADER =========================
+\begin{minipage}[c]{0.10\textwidth}
+    % Left side: Institute Logo
+    \includegraphics[width=\linewidth]{logo.png}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.72\textwidth}
+    % Center: Student Details
+    \begin{center} 
+        {\fontsize{12pt}{14pt}\selectfont \textbf{Sayak Sardar --- 23IE10036}}\\[1pt]
+        {\fontsize{8.5pt}{10pt}\selectfont \textbf{INSTRUMENTATION ENGINEERING (B.Tech)}}\\[1pt]
+        {\fontsize{8pt}{9pt}\selectfont
+        \faPhone\ +91 9876543210 \hspace{1em}
+        \faEnvelope\ \href{mailto:sayak@example.com}{sayak@example.com} \hspace{1em}
+        \faLinkedin\ \href{https://linkedin.com/in/sayaksardar}{Sayak Sardar}}
+    \end{center}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.10\textwidth}
+    % Right side: Student Photo dynamically injected via Jinja
+    \includegraphics[width=\linewidth]{photo.jpg}
+\end{minipage}
+
+% ========================= EDUCATION =========================
+\cvsection{Education} 
+
+\renewcommand{\arraystretch}{1.1}
+\begin{tabularx}{\textwidth}{
+>{\raggedright\arraybackslash}p{1.2cm}
+>{\raggedright\arraybackslash}X
+>{\raggedright\arraybackslash}X
+>{\raggedright\arraybackslash}p{2.5cm}
+}
+\textbf{Year} & \textbf{Degree/Exam} & \textbf{Institute} & \textbf{CGPA/Marks} \\
+2027 & B.Tech & IIT Kharagpur & 8.50/10 \\
+\end{tabularx}
+
+% ========================= CONDITIONAL: PROJECTS =========================
+
+% ========================= CONDITIONAL: INTERNSHIPS =========================
+
+% ========================= SKILLS =========================
+\cvsection{Skills and Expertise}
+
+\noindent\textbf{Programming Languages \& Tools:} C++, Python, Embedded Systems\\[1pt]
+\noindent\textbf{Expertise:} Algorithms, Hardware Interfacing
+
+\end{document}

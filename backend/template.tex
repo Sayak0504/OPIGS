@@ -1,0 +1,108 @@
+\documentclass[10pt,a4paper]{article}
+
+% ========================= PACKAGES =========================
+\usepackage[a4paper, margin=0.25in, top=0.25in, bottom=0.25in]{geometry}
+\usepackage[dvipsnames,table]{xcolor}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{fontawesome5}
+\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+\usepackage{setspace}
+
+\usepackage[scaled=0.84]{helvet}
+\renewcommand{\familydefault}{\sfdefault}
+\setstretch{0.95}
+
+% ========================= COLORS =========================
+\definecolor{sectionblue}{HTML}{D9E2F3}
+
+% ========================= CUSTOM COMMANDS =========================
+\newcommand{\cvsection}[1]{
+    \vspace{2pt} 
+    \noindent\colorbox{sectionblue}{\makebox[\dimexpr\textwidth-2\fboxsep\relax][c]{\textbf{\uppercase{#1}}}}\par
+    \vspace{2pt}
+}
+
+\begin{document}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\tabcolsep}{4pt}
+
+% ========================= HEADER =========================
+\begin{minipage}[c]{0.10\textwidth}
+    % Left side: Institute Logo
+    \includegraphics[width=\linewidth]{logo.png}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.72\textwidth}
+    % Center: Student Details
+    \begin{center} 
+        {\fontsize{12pt}{14pt}\selectfont \textbf{<< name >> --- << roll_number >>}}\\[1pt]
+        {\fontsize{8.5pt}{10pt}\selectfont \textbf{<< program >>}}\\[1pt]
+        {\fontsize{8pt}{9pt}\selectfont
+        \faPhone\ << phone >> \hspace{1em}
+        \faEnvelope\ \href{mailto:<< email >>}{<< email >>} \hspace{1em}
+        \faLinkedin\ \href{<< linkedin_url >>}{<< linkedin_name >>}}
+    \end{center}
+\end{minipage}
+\hfill
+\begin{minipage}[c]{0.10\textwidth}
+    % Right side: Student Photo dynamically injected via Jinja
+    \includegraphics[width=\linewidth]{<< photo_filename >>}
+\end{minipage}
+
+% ========================= EDUCATION =========================
+\cvsection{Education} 
+
+\renewcommand{\arraystretch}{1.1}
+\begin{tabularx}{\textwidth}{
+>{\raggedright\arraybackslash}p{1.2cm}
+>{\raggedright\arraybackslash}X
+>{\raggedright\arraybackslash}X
+>{\raggedright\arraybackslash}p{2.5cm}
+}
+\textbf{Year} & \textbf{Degree/Exam} & \textbf{Institute} & \textbf{CGPA/Marks} \\
+<% for edu in education %>
+<< edu.year >> & << edu.degree >> & << edu.institute >> & << edu.score >> \\
+<% endfor %>
+\end{tabularx}
+
+% ========================= CONDITIONAL: PROJECTS =========================
+<% if projects %>
+\cvsection{Project}
+<% for proj in projects %>
+\noindent\textbf{<< proj.title >> | << proj.location >>} \hfill \textbf{<< proj.date >>}\\
+\textit{Overview:} << proj.overview >>
+\begin{itemize}[leftmargin=1.5em, label={$\bullet$}, itemsep=0pt, parsep=0pt, topsep=1pt, partopsep=0pt]
+    <% for point in proj.points %>
+    \item << point >>
+    <% endfor %>
+\end{itemize}
+\vspace{1pt}
+<% endfor %>
+<% endif %>
+
+% ========================= CONDITIONAL: INTERNSHIPS =========================
+<% if internships %>
+\cvsection{Internships}
+<% for intern in internships %>
+\noindent\textbf{<< intern.role >> | << intern.company >>} \hfill \textbf{<< intern.date >>}\\
+\textit{Overview:} << intern.overview >>
+\begin{itemize}[leftmargin=1.5em, label={$\bullet$}, itemsep=0pt, parsep=0pt, topsep=1pt, partopsep=0pt]
+    <% for point in intern.points %>
+    \item << point >>
+    <% endfor %>
+\end{itemize}
+\vspace{1pt}
+<% endfor %>
+<% endif %>
+
+% ========================= SKILLS =========================
+\cvsection{Skills and Expertise}
+
+\noindent\textbf{Programming Languages \& Tools:} << tech_skills >>\\[1pt]
+\noindent\textbf{Expertise:} << core_expertise >>
+
+\end{document}
