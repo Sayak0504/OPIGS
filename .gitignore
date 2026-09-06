@@ -46,3 +46,4 @@ dist/
 *.aux
 *.log
 *.out
+uploads/

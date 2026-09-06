@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, JSON, Boolean, DateTime
+from sqlalchemy import Column, Integer, String, Text, JSON, Boolean, DateTime, ForeignKey
 from database import Base
 from datetime import datetime
 
@@ -14,7 +14,7 @@ class User(Base):
     company_name    = Column(String, nullable=True)    # recruiters only
     is_verified     = Column(Boolean, default=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
-    
+
 class Notice(Base):
     __tablename__ = "notices"
 
@@ -36,10 +36,30 @@ class Job(Base):
 class StudentProfile(Base):
     __tablename__ = "student_profiles"
 
-    id = Column(Integer, primary_key=True, index=True)
-    full_name = Column(String)
-    roll_number = Column(String, unique=True, index=True)
-    email = Column(String)
-    phone = Column(String)
-    tech_skills = Column(Text)
-    projects = Column(JSON) # Stores the array of project dictionaries
+    id             = Column(Integer, primary_key=True, index=True)
+    user_id        = Column(Integer, ForeignKey("users.id"), index=True)
+    full_name      = Column(String)
+    roll_number    = Column(String, unique=True, index=True)
+    email          = Column(String)
+    phone          = Column(String)
+    program        = Column(String)   # Instrumentation Engineering (B.Tech)
+    degree         = Column(String)   # B.Tech
+    institute      = Column(String)   # IIT Kharagpur
+    passing_year   = Column(String)   # 2027
+    cgpa           = Column(String)   # 8.50/10
+    linkedin_url   = Column(String)
+    linkedin_name  = Column(String)
+    tech_skills    = Column(Text)
+    core_expertise = Column(Text)
+    projects       = Column(JSON)
+    photo_filename = Column(String)
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    job_id     = Column(Integer, ForeignKey("jobs.id"), index=True, nullable=False)
+    status     = Column(String, default="applied")   # applied | shortlisted | interviewing
+    cv_name    = Column(String)
+    applied_at = Column(DateTime, default=datetime.utcnow)

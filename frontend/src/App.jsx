@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import { api, apiBlob, apiUpload, getName, logout } from "./api";
 
+const STAGES = [
+  { key: 'applied',      label: 'Applied',      color: '#3B82F6' },
+  { key: 'shortlisted',  label: 'Shortlisted',  color: '#F59E0B' },
+  { key: 'interviewing', label: 'Interviewing', color: '#10B981' },
+];
+
 function App() {
   const [activeTab, setActiveTab] = useState('cv_builder');
   const [chatOpen, setChatOpen] = useState(false);
@@ -15,11 +21,15 @@ function App() {
   const [jobs, setJobs] = useState([]);
   const [photoUrl, setPhotoUrl] = useState(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [applications, setApplications] = useState([]);
+  const [cvChoice, setCvChoice] = useState({});
+  const [dragId, setDragId] = useState(null);
 
     useEffect(() => {
     api('/api/notices').then(setNotices).catch(console.error);
     api('/api/jobs').then(setJobs).catch(console.error);
     loadPhoto();
+    loadApplications();
 
     api('/api/student/me')
       .then((p) => {
@@ -97,6 +107,53 @@ function App() {
         body: JSON.stringify(buildPayload()),
       });
       alert("Profile saved to your account.");
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+    const loadApplications = () =>
+    api('/api/applications').then(setApplications).catch(console.error);
+
+  const applyToJob = async (jobId) => {
+    try {
+      const res = await api('/api/applications', {
+        method: 'POST',
+        body: JSON.stringify({ job_id: jobId, cv_name: cvChoice[jobId] || 'Base_CV.pdf' }),
+      });
+      alert(res.message);
+      loadApplications();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  const moveCard = async (newStatus) => {
+    const id = dragId;
+    setDragId(null);
+    const card = applications.find((a) => a.id === id);
+    if (!card || card.status === newStatus) return;
+
+    // move it on screen first, so the drag feels instant
+    setApplications((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, status: newStatus } : a))
+    );
+
+    try {
+      await api(`/api/applications/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: newStatus }),
+      });
+    } catch (err) {
+      alert(err.message);
+      loadApplications();   // server said no — pull the truth back
+    }
+  };
+
+  const withdraw = async (id) => {
+    if (!window.confirm('Withdraw this application?')) return;
+    try {
+      await api(`/api/applications/${id}`, { method: 'DELETE' });
+      loadApplications();
     } catch (err) {
       alert(err.message);
     }
@@ -214,20 +271,85 @@ function App() {
             </div>
           </div>
           <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-            <select style={{ padding: '10px', borderRadius: '6px', border: '1px solid #D1D5DB', backgroundColor: '#F9FAFB', color: '#374151', outline: 'none' }}>
+            <select
+              value={cvChoice[job.id] || 'Base_CV.pdf'}
+              onChange={(e) => setCvChoice({ ...cvChoice, [job.id]: e.target.value })}
+              style={{ padding: '10px', borderRadius: '6px', border: '1px solid #D1D5DB', backgroundColor: '#F9FAFB', color: '#374151', outline: 'none' }}>
               <option>Base_CV.pdf</option>
               <option>Core_Embedded_CV.pdf</option>
               <option>Software_CV.pdf</option>
             </select>
-            <button style={{ padding: '10px 24px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 2px 4px rgba(16, 185, 129, 0.2)' }}>
-              Apply
-            </button>
+
+            {applications.some((a) => a.job_id === job.id) ? (
+              <button disabled style={{ padding: '10px 24px', backgroundColor: '#E5E7EB', color: '#6B7280', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'not-allowed' }}>
+                ✓ Applied
+              </button>
+            ) : (
+              <button onClick={() => applyToJob(job.id)} style={{ padding: '10px 24px', backgroundColor: '#10B981', color: 'white', border: 'none', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 2px 4px rgba(16, 185, 129, 0.2)' }}>
+                Apply
+              </button>
+            )}
           </div>
         </div>
       ))}
     </div>
   );
 
+  const renderKanban = () => (
+    <div style={{ padding: '40px' }}>
+      <h2 style={pageHeaderStyle}>My Applications</h2>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', alignItems: 'start' }}>
+        {STAGES.map((stage) => {
+          const items = applications.filter((a) => a.status === stage.key);
+
+          return (
+            <div
+              key={stage.key}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => moveCard(stage.key)}
+              style={{ backgroundColor: '#F3F4F6', borderRadius: '12px', padding: '16px', minHeight: '320px', border: '1px solid #E5E7EB' }}>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+                <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: stage.color }} />
+                <span style={{ fontWeight: '700', color: '#111827' }}>{stage.label}</span>
+                <span style={{ marginLeft: 'auto', backgroundColor: '#E5E7EB', color: '#4B5563', borderRadius: '10px', padding: '2px 9px', fontSize: '12px', fontWeight: '600' }}>
+                  {items.length}
+                </span>
+              </div>
+
+              {items.length === 0 && (
+                <p style={{ fontSize: '13px', color: '#9CA3AF', textAlign: 'center', marginTop: '30px' }}>
+                  Drag cards here
+                </p>
+              )}
+
+              {items.map((a) => (
+                <div
+                  key={a.id}
+                  draggable
+                  onDragStart={() => setDragId(a.id)}
+                  style={{ backgroundColor: '#ffffff', borderRadius: '8px', padding: '14px', marginBottom: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: `4px solid ${stage.color}`, cursor: 'grab', textAlign: 'left' }}>
+
+                  <h4 style={{ margin: '0 0 6px 0', fontSize: '16px', color: '#111827' }}>{a.company_name}</h4>
+                  <div style={{ fontSize: '13px', color: '#4B5563' }}>{a.role}</div>
+                  <div style={{ fontSize: '13px', color: '#059669', fontWeight: '600', marginTop: '4px' }}>{a.ctc}</div>
+                  <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '8px' }}>📄 {a.cv_name}</div>
+
+                  <button
+                    onClick={() => withdraw(a.id)}
+                    style={{ marginTop: '10px', padding: '4px 10px', fontSize: '12px', backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                    Withdraw
+                  </button>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+  
   const renderCVBuilder = () => {
     // Helper style for disabled inputs
     const inputStyle = {
@@ -415,6 +537,7 @@ function App() {
           <div onClick={() => setActiveTab('notice_board')} style={navItemStyle(activeTab === 'notice_board')}>📌 Notice Board</div>
           <div onClick={() => setActiveTab('cv_builder')} style={navItemStyle(activeTab === 'cv_builder')}>📝 CV Builder</div>
           <div onClick={() => setActiveTab('companies')} style={navItemStyle(activeTab === 'companies')}>🏢 Companies</div>
+          <div onClick={() => setActiveTab('kanban')} style={navItemStyle(activeTab === 'kanban')}>📋 My Applications</div>
         </div>
 
         {/* USER + LOGOUT */}
@@ -435,6 +558,7 @@ function App() {
         {activeTab === 'notice_board' && renderNoticeBoard()}
         {activeTab === 'cv_builder' && renderCVBuilder()}
         {activeTab === 'companies' && renderCompanies()}
+        {activeTab === 'kanban' && renderKanban()}
 
         {/* AI ASSISTANT */}
         <div style={{ position: 'fixed', bottom: '30px', right: '30px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', zIndex: 1000 }}>
