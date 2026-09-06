@@ -36,3 +36,13 @@ __pycache__/
 .env.local
 .DS_Store
 Thumbs.d
+venv/
+__pycache__/
+*.pyc
+*.db
+.env
+node_modules/
+dist/
+*.aux
+*.log
+*.out
