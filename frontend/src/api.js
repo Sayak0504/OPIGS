@@ -42,3 +42,44 @@ export async function api(path, options = {}) {
   }
   return data;
 }
+
+export async function apiBlob(path, options = {}) {
+  const token = getToken();
+
+  const res = await fetch(BASE_URL + path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  if (res.status === 401) {
+    logout();
+    throw new Error("Session expired, please log in again");
+  }
+  if (!res.ok) throw new Error("Could not generate the PDF");
+  if (!res.ok) throw new Error("Request failed");
+
+  return res.blob();
+}
+
+export async function apiUpload(path, formData) {
+  const token = getToken();
+
+  const res = await fetch(BASE_URL + path, {
+    method: "POST",
+    headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    logout();
+    throw new Error("Session expired, please log in again");
+  }
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Upload failed");
+  return data;
+}

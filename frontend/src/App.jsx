@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getName, logout } from "./api";
+import { api, apiBlob, apiUpload, getName, logout } from "./api";
 
 function App() {
   const [activeTab, setActiveTab] = useState('cv_builder');
@@ -13,25 +13,48 @@ function App() {
   // --- Database State ---
   const [notices, setNotices] = useState([]);
   const [jobs, setJobs] = useState([]);
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
 
-  useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/notices')
-      .then(res => res.json())
-      .then(data => setNotices(data))
-      .catch(err => console.error("Error fetching notices:", err));
+    useEffect(() => {
+    api('/api/notices').then(setNotices).catch(console.error);
+    api('/api/jobs').then(setJobs).catch(console.error);
+    loadPhoto();
 
-    fetch('http://127.0.0.1:8000/api/jobs')
-      .then(res => res.json())
-      .then(data => setJobs(data))
-      .catch(err => console.error("Error fetching jobs:", err));
+    api('/api/student/me')
+      .then((p) => {
+        setName(p.full_name || '');
+        setRollNumber(p.roll_number || '');
+        setEmail(p.email || '');
+        setPhone(p.phone || '');
+        setSkills(p.tech_skills || '');
+        setProjects(p.projects || []);
+        setProgram(p.program || '');
+        setDegree(p.degree || '');
+        setInstitute(p.institute || '');
+        setPassingYear(p.passing_year || '');
+        setCgpa(p.cgpa || '');
+        setLinkedinUrl(p.linkedin_url || '');
+        setLinkedinName(p.linkedin_name || '');
+        setExpertise(p.core_expertise || '');
+      })
+      .catch(console.error);
   }, []);
 
   // --- CV Builder State ---
-  const [name, setName] = useState('Sayak Sardar');
-  const [rollNumber, setRollNumber] = useState('23IE10036');
-  const [email, setEmail] = useState('sayak@example.com');
-  const [phone, setPhone] = useState('+91 9876543210');
-  const [skills, setSkills] = useState('C++, Python, Embedded Systems');
+  const [name, setName] = useState('');
+  const [rollNumber, setRollNumber] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [skills, setSkills] = useState('');
+  const [program, setProgram] = useState('');
+  const [degree, setDegree] = useState('');
+  const [institute, setInstitute] = useState('');
+  const [passingYear, setPassingYear] = useState('');
+  const [cgpa, setCgpa] = useState('');
+  const [linkedinUrl, setLinkedinUrl] = useState('');
+  const [linkedinName, setLinkedinName] = useState('');
+  const [expertise, setExpertise] = useState('');
   
   // Dynamic Projects Array
   const [projects, setProjects] = useState([]);
@@ -51,74 +74,69 @@ function App() {
     setProjects(updatedProjects);
   };
 
+  const buildPayload = () => ({
+    name: name,
+    roll_number: rollNumber,
+    program: program,
+    phone: phone,
+    email: email,
+    linkedin_url: linkedinUrl,
+    linkedin_name: linkedinName,
+    photo_filename: "photo.jpg",
+    education: [{ year: passingYear, degree: degree, institute: institute, score: cgpa }],
+    projects: projects.map(p => ({ ...p, points: [p.overview] })),
+    internships: [],
+    tech_skills: skills,
+    core_expertise: expertise
+  });
+
   const saveProfile = async () => {
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/student/save', {
+      await api('/api/student/save', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name, 
-          roll_number: rollNumber,
-          program: "INSTRUMENTATION ENGINEERING (B.Tech)",
-          phone: phone,
-          email: email,
-          linkedin_url: "https://linkedin.com/in/sayaksardar",
-          linkedin_name: "Sayak Sardar",
-          photo_filename: "photo.jpg",
-          education: [{ year: "2027", degree: "B.Tech", institute: "IIT Kharagpur", score: "8.50/10" }],
-          projects: projects.map(p => ({
-            ...p,
-            points: [p.overview] 
-          })), 
-          internships: [],
-          tech_skills: skills,
-          core_expertise: "Algorithms, Hardware Interfacing"
-        })
+        body: JSON.stringify(buildPayload()),
       });
-
-      if (response.ok) {
-        alert("Profile saved to database successfully!");
-      } else {
-        alert("Error saving profile. Is the backend running?");
-      }
-    } catch (error) {
-      console.error("Error saving profile:", error);
-      alert("Failed to connect to backend server.");
+      alert("Profile saved to your account.");
+    } catch (err) {
+      alert(err.message);
     }
+  };
+
+  const loadPhoto = async () => {
+    try {
+      const blob = await apiBlob('/api/student/photo');
+      setPhotoUrl(URL.createObjectURL(blob));
+    } catch {
+      setPhotoUrl(null);   // no photo uploaded yet — that's fine
+    }
+  };
+
+  const uploadPhoto = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setPhotoBusy(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      await apiUpload('/api/student/photo', form);
+      await loadPhoto();
+    } catch (err) {
+      alert(err.message);
+    }
+    setPhotoBusy(false);
   };
 
   const generatePDF = async () => {
     setLoading(true);
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/generate-cv', {
+      const blob = await apiBlob('/api/generate-cv', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: name, 
-          roll_number: rollNumber,
-          program: "INSTRUMENTATION ENGINEERING (B.Tech)",
-          phone: phone,
-          email: email,
-          linkedin_url: "https://linkedin.com/in/sayaksardar",
-          linkedin_name: "Sayak Sardar",
-          photo_filename: "photo.jpg",
-          education: [{ year: "2027", degree: "B.Tech", institute: "IIT Kharagpur", score: "8.50/10" }],
-          projects: projects.map(p => ({
-            ...p,
-            points: [p.overview] 
-          })), 
-          internships: [],
-          tech_skills: skills,
-          core_expertise: "Algorithms, Hardware Interfacing"
-        })
+        body: JSON.stringify(buildPayload()),
       });
-
-      if (response.ok) {
-        const blob = await response.blob();
-        setPdfUrl(URL.createObjectURL(blob));
-      }
-    } catch (error) {
-      console.error(error);
+      setPdfUrl(URL.createObjectURL(blob));
+    } catch (err) {
+      alert(err.message);
     }
     setLoading(false);
   };
@@ -242,6 +260,20 @@ function App() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', textAlign: 'left', paddingBottom: '40px' }}>
             
             {/* Basic Info */}
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '15px', backgroundColor: '#F9FAFB', borderRadius: '8px', border: '1px solid #E5E7EB' }}>
+              <div style={{ width: '84px', height: '100px', borderRadius: '6px', overflow: 'hidden', backgroundColor: '#E5E7EB', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                {photoUrl
+                  ? <img src={photoUrl} alt="Profile" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <span style={{ fontSize: '28px' }}>👤</span>}
+              </div>
+              <div>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '6px' }}>Passport Photo</label>
+                <input type="file" accept="image/jpeg,image/png" onChange={uploadPhoto} disabled={isLocked || photoBusy} style={{ fontSize: '13px' }} />
+                <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '6px' }}>
+                  {photoBusy ? 'Uploading...' : 'JPG or PNG, under 2 MB. Saves immediately.'}
+                </div>
+              </div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                 <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Full Name</label>
@@ -262,6 +294,48 @@ function App() {
                 <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Phone</label>
                 <input type="text" value={phone} onChange={(e) => setPhone(e.target.value)} disabled={isLocked} style={inputStyle} />
               </div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Department / Program</label>
+              <input type="text" placeholder="Instrumentation Engineering (B.Tech)" value={program} onChange={(e) => setProgram(e.target.value)} disabled={isLocked} style={inputStyle} />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Degree</label>
+                <input type="text" placeholder="B.Tech" value={degree} onChange={(e) => setDegree(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Institute</label>
+                <input type="text" placeholder="IIT Kharagpur" value={institute} onChange={(e) => setInstitute(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Passing Year</label>
+                <input type="text" placeholder="2027" value={passingYear} onChange={(e) => setPassingYear(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>CGPA</label>
+                <input type="text" placeholder="8.50/10" value={cgpa} onChange={(e) => setCgpa(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '15px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>LinkedIn Username</label>
+                <input type="text" placeholder="sayaksardar" value={linkedinName} onChange={(e) => setLinkedinName(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>LinkedIn URL</label>
+                <input type="text" placeholder="https://linkedin.com/in/sayaksardar" value={linkedinUrl} onChange={(e) => setLinkedinUrl(e.target.value)} disabled={isLocked} style={inputStyle} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Core Expertise</label>
+              <input type="text" placeholder="Algorithms, Hardware Interfacing" value={expertise} onChange={(e) => setExpertise(e.target.value)} disabled={isLocked} style={inputStyle} />
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
