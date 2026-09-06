@@ -663,3 +663,159 @@ Text so far:
 {tail}"""
 
     return {"completion": ask_gemini(prompt).strip().strip('"')}
+
+
+# ============ PLACEMENT CHATBOT ============
+
+
+def strip_html(html):
+    """Editor HTML to readable plain text, for feeding the model."""
+    if not html:
+        return ""
+
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.parts = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "li":
+                self.parts.append("\n- ")
+            elif tag in ("p", "br", "ul", "ol"):
+                self.parts.append("\n")
+
+        def handle_data(self, data):
+            self.parts.append(data)
+
+    s = _Stripper()
+    s.feed(html)
+    lines = [ln.strip() for ln in "".join(s.parts).split("\n")]
+    return "\n".join(ln for ln in lines if ln)
+
+
+def build_portal_context(db, user):
+    """Everything the assistant is allowed to see about this student."""
+    L = [f"STUDENT: {user.full_name} ({user.email})"]
+
+    profile = db.query(models.StudentProfile).filter(
+        models.StudentProfile.user_id == user.id
+    ).first()
+
+    if profile:
+        L.append("\n--- THEIR CV ---")
+        L.append(f"Roll number: {profile.roll_number or 'not filled'}")
+        L.append(f"Program: {profile.program or 'not filled'} | Degree: {profile.degree or 'not filled'} "
+                 f"| Institute: {profile.institute or 'not filled'} | Graduating: {profile.passing_year or 'not filled'} "
+                 f"| CGPA: {profile.cgpa or 'not filled'}")
+        L.append(f"Phone: {profile.phone or 'not filled'} | LinkedIn: {profile.linkedin_url or 'not filled'}")
+        L.append(f"Photo uploaded: {'yes' if profile.photo_filename else 'NO'}")
+        L.append(f"Technical skills: {profile.tech_skills or 'NONE LISTED'}")
+        L.append(f"Core expertise: {profile.core_expertise or 'NONE LISTED'}")
+
+        projects = profile.projects or []
+        if projects:
+            L.append(f"Projects ({len(projects)}):")
+            for p in projects:
+                L.append(f"  * {p.get('title') or 'Untitled'}  [{p.get('date') or 'no date'}]")
+                if p.get("overview"):
+                    L.append(f"    Overview: {p['overview']}")
+                body = strip_html(p.get("description", ""))
+                for ln in body.split("\n"):
+                    if ln:
+                        L.append(f"    {ln}")
+        else:
+            L.append("Projects: NONE ADDED YET")
+    else:
+        L.append("\n--- THEIR CV ---\nThe student has not filled in their CV at all yet.")
+
+    jobs = db.query(models.Job).all()
+    if jobs:
+        L.append("\n--- COMPANIES CURRENTLY RECRUITING ---")
+        for j in jobs:
+            L.append(f"  * {j.company_name} — role: {j.role}, CTC: {j.ctc}, deadline: {j.deadline}")
+    else:
+        L.append("\n--- COMPANIES ---\nNo companies are listed on the portal right now.")
+
+    rows = (
+        db.query(models.Application, models.Job)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .filter(models.Application.user_id == user.id)
+        .all()
+    )
+    if rows:
+        L.append("\n--- THEIR APPLICATIONS ---")
+        for a, j in rows:
+            L.append(f"  * {j.company_name} ({j.role}) — stage: {a.status}, CV submitted: {a.cv_name}")
+    else:
+        L.append("\n--- THEIR APPLICATIONS ---\nThey have not applied anywhere yet.")
+
+    notices = db.query(models.Notice).all()
+    if notices:
+        L.append("\n--- NOTICE BOARD ---")
+        for n in notices:
+            L.append(f"  * [{n.category}] {n.title}: {n.content}")
+
+    return "\n".join(L)
+
+
+CHAT_SYSTEM = """You are the OPIGS placement assistant, helping an engineering student with their CV and campus placements.
+
+You can see this student's live portal data below: their CV, the companies currently recruiting, their applications, and the notice board. Answer questions about any of it directly and specifically. NEVER tell the student to go and check the portal themselves — you are looking at the same data they are.
+
+How to reply:
+- Be concise. Two or three sentences unless more is genuinely needed.
+- Answer only from the portal data given. If something is not in it, say plainly that it is not on the portal rather than guessing.
+- NEVER invent companies, deadlines, numbers, tools or results.
+- Plain text only. No markdown bold, no headings.
+
+When asked to turn a project description into bullet points:
+- Reply with ONLY those lines, each starting with "- ". No intro, no closing sentence.
+- Each bullet opens with a past-tense action verb, stays under 25 words, and covers a different aspect.
+- If a bullet would be stronger with a metric, ask the student for the number instead of inventing one.
+
+When asked which CV to use for a company:
+- Compare that company's role against the student's actual listed skills and projects.
+- Recommend one of Base_CV.pdf, Core_Embedded_CV.pdf or Software_CV.pdf, say which project to lead with, and name any skill gap worth addressing.
+
+When asked to rate, score or review the CV:
+- Score five areas out of 20 each: Completeness (all fields filled, photo, contacts), Impact (action verbs and outcomes), Quantification (real numbers present), Technical specificity (named tools, not vague claims), Writing quality (concise, no typos, consistent tense).
+- Give the total out of 100, then the five sub-scores on separate lines, then the three most important fixes.
+- Be honest. A CV with empty fields and no numbers should score badly. Do not be encouraging at the cost of being useful.
+
+If asked something unrelated to CVs, placements, interviews or projects, say briefly that you focus on placement help."""
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatIn(BaseModel):
+    messages: List[ChatMessage]
+
+
+@app.post("/api/ai/chat")
+def ai_chat(
+    data: ChatIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if not data.messages:
+        raise HTTPException(400, "No message sent")
+
+    context = build_portal_context(db, user)
+
+    recent = data.messages[-12:]
+    transcript = "\n\n".join(
+        f"{'Student' if m.role == 'user' else 'Assistant'}: {m.content}"
+        for m in recent
+    )
+
+    prompt = (
+        f"{CHAT_SYSTEM}\n\n"
+        f"===== LIVE PORTAL DATA =====\n{context}\n"
+        f"===== END PORTAL DATA =====\n\n"
+        f"{transcript}\n\nAssistant:"
+    )
+
+    return {"reply": ask_gemini(prompt)}

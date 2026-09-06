@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api, apiBlob, apiUpload, getName, logout } from "./api";
 import RichEditor from './RichEditor';
 
@@ -27,6 +27,15 @@ function App() {
   const [dragId, setDragId] = useState(null);
   const [aiBusy, setAiBusy] = useState(null);
   const [aiUndo, setAiUndo] = useState({});
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const chatEndRef = useRef(null);
+  const [saveState, setSaveState] = useState('idle');   // idle | dirty | saving | saved | error
+  const [saveError, setSaveError] = useState('');
+  const saveTimerRef = useRef(null);
+  const loadedRef = useRef(false);
+  const lastSavedRef = useRef(null);
 
     useEffect(() => {
     api('/api/notices').then(setNotices).catch(console.error);
@@ -50,8 +59,12 @@ function App() {
         setLinkedinUrl(p.linkedin_url || '');
         setLinkedinName(p.linkedin_name || '');
         setExpertise(p.core_expertise || '');
+        loadedRef.current = true;
       })
-      .catch(console.error);
+      .catch((err) => {
+        console.error(err);
+        loadedRef.current = true;
+      });
   }, []);
 
   // --- CV Builder State ---
@@ -133,14 +146,83 @@ function App() {
     core_expertise: expertise
   });
 
-  const saveProfile = async () => {
+  /* ---------- auto-save ---------- */
+
+  const payloadKey = JSON.stringify(buildPayload());
+
+  const runAutoSave = async (key) => {
+    setSaveState('saving');
     try {
       await api('/api/student/save', {
         method: 'POST',
         body: JSON.stringify(buildPayload()),
       });
-      alert("Profile saved to your account.");
+      lastSavedRef.current = key;
+      setSaveError('');
+      setSaveState('saved');
     } catch (err) {
+      setSaveError(err.message);
+      setSaveState('error');
+    }
+  };
+
+  useEffect(() => {
+    if (isLocked || !loadedRef.current) return;
+
+    // first snapshot after loading — this is the saved state, nothing to do
+    if (lastSavedRef.current === null) {
+      lastSavedRef.current = payloadKey;
+      return;
+    }
+
+    if (payloadKey === lastSavedRef.current) return;
+
+    setSaveState('dirty');
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => runAutoSave(payloadKey), 1500);
+
+    return () => clearTimeout(saveTimerRef.current);
+  }, [payloadKey, isLocked]);
+  
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages, chatBusy]);
+
+  const sendChat = async (preset) => {
+    const text = (preset ?? chatInput).trim();
+    if (!text || chatBusy) return;
+
+    const next = [...chatMessages, { role: 'user', content: text }];
+    setChatMessages(next);
+    setChatInput('');
+    setChatBusy(true);
+
+    try {
+      const res = await api('/api/ai/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: next }),
+      });
+      setChatMessages([...next, { role: 'assistant', content: res.reply }]);
+    } catch (err) {
+      setChatMessages([...next, { role: 'assistant', content: `Sorry — ${err.message}` }]);
+    }
+    setChatBusy(false);
+  };
+
+  const saveProfile = async () => {
+    clearTimeout(saveTimerRef.current);
+    setSaveState('saving');
+    try {
+      await api('/api/student/save', {
+        method: 'POST',
+        body: JSON.stringify(buildPayload()),
+      });
+      lastSavedRef.current = JSON.stringify(buildPayload());
+      setSaveError('');
+      setSaveState('saved');
+    } catch (err) {
+      setSaveError(err.message);
+      setSaveState('error');
       alert(err.message);
     }
   };
@@ -443,6 +525,22 @@ function App() {
             </div>
           )}
 
+          {!isLocked && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', fontSize: '13px',
+                          color: saveState === 'error' ? '#DC2626' : '#6B7280' }}>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, backgroundColor:
+                saveState === 'saved'  ? '#10B981' :
+                saveState === 'saving' ? '#F59E0B' :
+                saveState === 'dirty'  ? '#F59E0B' :
+                saveState === 'error'  ? '#DC2626' : '#D1D5DB' }} />
+              {saveState === 'idle'   && 'Changes save automatically'}
+              {saveState === 'dirty'  && 'Unsaved changes...'}
+              {saveState === 'saving' && 'Saving...'}
+              {saveState === 'saved'  && 'All changes saved'}
+              {saveState === 'error'  && `Could not save: ${saveError}`}
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', textAlign: 'left', paddingBottom: '40px' }}>
             
             {/* Basic Info */}
@@ -592,7 +690,7 @@ function App() {
                   border: 'none', borderRadius: '8px', fontWeight: 'bold', fontSize: '15px', 
                   cursor: isLocked ? 'not-allowed' : 'pointer'
                 }}>
-                {isLocked ? '🔒 Saving Disabled' : '💾 Save Profile Data'}
+                {isLocked ? '🔒 Saving Disabled' : '💾 Save now'}
               </button>
               
               <button 
@@ -657,20 +755,91 @@ function App() {
         {/* AI ASSISTANT */}
         <div style={{ position: 'fixed', bottom: '30px', right: '30px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', zIndex: 1000 }}>
           {chatOpen && (
-            <div style={{ width: '320px', height: '420px', backgroundColor: 'white', borderRadius: '12px', marginBottom: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid #E5E7EB' }}>
-              <div style={{ backgroundColor: '#2563EB', color: 'white', padding: '16px', fontWeight: 'bold', fontSize: '15px' }}>
-                🤖 Placement AI Assistant
+            <div style={{ width: '380px', height: '540px', backgroundColor: 'white', borderRadius: '12px', marginBottom: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid #E5E7EB' }}>
+
+              <div style={{ backgroundColor: '#2563EB', color: 'white', padding: '14px 16px', fontWeight: 'bold', fontSize: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>🤖 Placement AI Assistant</span>
+                {chatMessages.length > 0 && (
+                  <button onClick={() => setChatMessages([])} title="Clear chat"
+                    style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', borderRadius: '4px', padding: '3px 9px', fontSize: '12px', cursor: 'pointer' }}>
+                    Clear
+                  </button>
+                )}
               </div>
-              <div style={{ flex: 1, padding: '16px', overflowY: 'auto', fontSize: '14px', color: '#374151', backgroundColor: '#F9FAFB' }}>
-                <div style={{ backgroundColor: '#E0E7FF', padding: '12px', borderRadius: '8px', color: '#1E40AF', marginBottom: '10px' }}>
-                  <strong>AI:</strong> Hi Sayak! I see you are applying to Samsung R&D. Do you want me to review your Embedded Systems CV before you apply?
-                </div>
+
+              <div style={{ flex: 1, padding: '14px', overflowY: 'auto', fontSize: '14px', backgroundColor: '#F9FAFB' }}>
+
+                {chatMessages.length === 0 && (
+                  <div>
+                    <div style={{ backgroundColor: '#E0E7FF', padding: '12px', borderRadius: '10px', color: '#1E40AF', marginBottom: '14px', textAlign: 'left' }}>
+                      Hi {getName()}. Paste a project description and I'll turn it into CV bullet points, or ask me anything about placements.
+                    </div>
+
+                    <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '8px', textAlign: 'left' }}>Try:</div>
+                    {[
+                      'Rate my CV out of 100 and tell me what to fix',
+                      'Which companies are recruiting right now?',
+                      'Which CV should I use for ',
+                      'Turn this into 3 CV bullets: ',
+                    ].map((q) => (
+                      <div key={q}
+                        onClick={() => (q.endsWith(' ') ? setChatInput(q) : sendChat(q))}
+                        style={{ padding: '9px 11px', marginBottom: '7px', backgroundColor: 'white', border: '1px solid #E5E7EB', borderRadius: '8px', cursor: 'pointer', color: '#374151', fontSize: '13px', textAlign: 'left' }}>
+                        {q.trim()}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {chatMessages.map((m, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', marginBottom: '10px' }}>
+                    <div style={{ maxWidth: '85%', padding: '10px 12px', borderRadius: '10px', whiteSpace: 'pre-wrap', textAlign: 'left', lineHeight: '1.5',
+                      backgroundColor: m.role === 'user' ? '#2563EB' : '#ffffff',
+                      color: m.role === 'user' ? '#ffffff' : '#374151',
+                      border: m.role === 'user' ? 'none' : '1px solid #E5E7EB' }}>
+                      {m.content}
+                      {m.role === 'assistant' && (
+                        <button
+                          onClick={() => navigator.clipboard.writeText(m.content)}
+                          style={{ display: 'block', marginTop: '8px', padding: '3px 9px', fontSize: '11px', backgroundColor: '#F3F4F6', color: '#6B7280', border: '1px solid #D1D5DB', borderRadius: '4px', cursor: 'pointer' }}>
+                          📋 Copy
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+
+                {chatBusy && (
+                  <div style={{ color: '#9CA3AF', fontSize: '13px', textAlign: 'left' }}>Thinking...</div>
+                )}
+
+                <div ref={chatEndRef} />
               </div>
-              <div style={{ padding: '12px', borderTop: '1px solid #E5E7EB', backgroundColor: 'white' }}>
-                <input type="text" placeholder="Ask about policies, JDs..." style={{ width: '100%', padding: '10px', border: '1px solid #D1D5DB', borderRadius: '6px', outline: 'none', boxSizing: 'border-box' }} />
+
+              <div style={{ padding: '10px', borderTop: '1px solid #E5E7EB', backgroundColor: 'white', display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+                <textarea
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChat();
+                    }
+                  }}
+                  placeholder="Paste a project description, or ask..."
+                  rows={2}
+                  style={{ flex: 1, padding: '9px', border: '1px solid #D1D5DB', borderRadius: '6px', outline: 'none', resize: 'none', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }} />
+
+                <button
+                  onClick={() => sendChat()}
+                  disabled={chatBusy || !chatInput.trim()}
+                  style={{ padding: '10px 14px', backgroundColor: chatBusy || !chatInput.trim() ? '#E5E7EB' : '#2563EB', color: chatBusy || !chatInput.trim() ? '#9CA3AF' : 'white', border: 'none', borderRadius: '6px', cursor: chatBusy || !chatInput.trim() ? 'not-allowed' : 'pointer', fontWeight: '600' }}>
+                  ➤
+                </button>
               </div>
             </div>
           )}
+
           <button onClick={() => setChatOpen(!chatOpen)} style={{ width: '64px', height: '64px', borderRadius: '50%', backgroundColor: '#2563EB', color: 'white', border: 'none', fontSize: '28px', cursor: 'pointer', boxShadow: '0 10px 15px -3px rgba(37, 99, 235, 0.4)', transition: 'transform 0.2s' }} onMouseOver={(e) => e.target.style.transform = 'scale(1.05)'} onMouseOut={(e) => e.target.style.transform = 'scale(1)'}>
             💬
           </button>
