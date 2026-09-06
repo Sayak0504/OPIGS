@@ -1,7 +1,20 @@
-from sqlalchemy import Column, Integer, String, Text, JSON
+from sqlalchemy import Column, Integer, String, Text, JSON, Boolean, DateTime
 from database import Base
+from datetime import datetime
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    full_name       = Column(String, nullable=False)
+    email           = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    role            = Column(String, nullable=False)   # student | admin | recruiter | alumni
+    company_name    = Column(String, nullable=True)    # recruiters only
+    is_verified     = Column(Boolean, default=False)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+    
 class Notice(Base):
     __tablename__ = "notices"
 

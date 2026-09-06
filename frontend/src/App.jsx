@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getName, logout } from "./api";
 
 function App() {
   const [activeTab, setActiveTab] = useState('cv_builder');
@@ -340,6 +341,18 @@ function App() {
           <div onClick={() => setActiveTab('notice_board')} style={navItemStyle(activeTab === 'notice_board')}>📌 Notice Board</div>
           <div onClick={() => setActiveTab('cv_builder')} style={navItemStyle(activeTab === 'cv_builder')}>📝 CV Builder</div>
           <div onClick={() => setActiveTab('companies')} style={navItemStyle(activeTab === 'companies')}>🏢 Companies</div>
+        </div>
+
+        {/* USER + LOGOUT */}
+        <div style={{ marginTop: 'auto', padding: '20px 24px', borderTop: '1px solid #334155' }}>
+          <div style={{ fontSize: '13px', color: '#94A3B8', marginBottom: '10px' }}>
+            Signed in as <strong style={{ color: '#E2E8F0' }}>{getName()}</strong>
+          </div>
+          <button
+            onClick={logout}
+            style={{ width: '100%', padding: '10px', backgroundColor: '#334155', color: '#F1F5F9', border: '1px solid #475569', borderRadius: '6px', fontSize: '14px', fontWeight: '600', cursor: 'pointer' }}>
+            Log out
+          </button>
         </div>
       </div>
 

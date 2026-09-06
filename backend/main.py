@@ -1,3 +1,4 @@
+from routes_auth import router as auth_router
 from fastapi import Depends
 from sqlalchemy.orm import Session
 import models
@@ -13,11 +14,12 @@ import os
 import jinja2
 
 app = FastAPI(title="OPIGS CV Generator API")
+app.include_router(auth_router)
 
 # Allow React (which runs on port 5173) to communicate with this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
