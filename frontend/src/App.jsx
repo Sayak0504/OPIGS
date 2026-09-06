@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api, apiBlob, apiUpload, getName, logout } from "./api";
+import RichEditor from './RichEditor';
 
 const STAGES = [
   { key: 'applied',      label: 'Applied',      color: '#3B82F6' },
@@ -24,6 +25,8 @@ function App() {
   const [applications, setApplications] = useState([]);
   const [cvChoice, setCvChoice] = useState({});
   const [dragId, setDragId] = useState(null);
+  const [aiBusy, setAiBusy] = useState(null);
+  const [aiUndo, setAiUndo] = useState({});
 
     useEffect(() => {
     api('/api/notices').then(setNotices).catch(console.error);
@@ -74,7 +77,7 @@ function App() {
 
   // Helper to add a new empty project to the form
   const addProject = () => {
-    setProjects([...projects, { title: '', location: 'IIT Kharagpur', date: '', overview: '', points: [''] }]);
+    setProjects([...projects, { title: '', date: '', overview: '', description: '' }]);
   };
 
   // Helper to update a specific project's text
@@ -82,6 +85,29 @@ function App() {
     const updatedProjects = [...projects];
     updatedProjects[index][field] = value;
     setProjects(updatedProjects);
+  };
+
+    const removeProject = (index) => {
+    setProjects(projects.filter((_, i) => i !== index));
+  };
+
+  const updatePoint = (projIndex, pointIndex, value) => {
+    const next = [...projects];
+    next[projIndex].points = [...(next[projIndex].points || [])];
+    next[projIndex].points[pointIndex] = value;
+    setProjects(next);
+  };
+
+  const addPoint = (projIndex) => {
+    const next = [...projects];
+    next[projIndex].points = [...(next[projIndex].points || []), ''];
+    setProjects(next);
+  };
+
+  const removePoint = (projIndex, pointIndex) => {
+    const next = [...projects];
+    next[projIndex].points = next[projIndex].points.filter((_, i) => i !== pointIndex);
+    setProjects(next);
   };
 
   const buildPayload = () => ({
@@ -94,7 +120,14 @@ function App() {
     linkedin_name: linkedinName,
     photo_filename: "photo.jpg",
     education: [{ year: passingYear, degree: degree, institute: institute, score: cgpa }],
-    projects: projects.map(p => ({ ...p, points: [p.overview] })),
+    projects: projects
+      .filter(p => p.title.trim())
+      .map(p => ({
+        title: p.title,
+        date: p.date,
+        overview: (p.overview || '').trim(),
+        description: p.description || '',
+      })),
     internships: [],
     tech_skills: skills,
     core_expertise: expertise
@@ -111,6 +144,37 @@ function App() {
       alert(err.message);
     }
   };
+  const magicWrite = async (index, count = 3) => {
+    const proj = projects[index];
+    const source = (proj.overview || '').trim() || (proj.points || []).join(' ');
+
+    if (!source) {
+      alert('Describe the project in the Overview box first, then let AI turn it into bullets.');
+      return;
+    }
+
+    setAiBusy(index);
+    try {
+      const res = await api('/api/ai/magic-write', {
+        method: 'POST',
+        body: JSON.stringify({ title: proj.title, notes: source, count }),
+      });
+      setAiUndo({ ...aiUndo, [index]: proj.points || [] });
+      updateProject(index, 'points', res.bullets);
+    } catch (err) {
+      alert(err.message);
+    }
+    setAiBusy(null);
+  };
+
+  const undoMagicWrite = (index) => {
+    updateProject(index, 'points', aiUndo[index]);
+    const next = { ...aiUndo };
+    delete next[index];
+    setAiUndo(next);
+  };
+
+
     const loadApplications = () =>
     api('/api/applications').then(setApplications).catch(console.error);
 
@@ -475,13 +539,43 @@ function App() {
               </div>
 
               {projects.map((proj, index) => (
-                <div key={index} style={{ backgroundColor: '#F9FAFB', padding: '15px', borderRadius: '8px', border: '1px solid #E5E7EB', marginBottom: '10px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  <input type="text" placeholder="Project Title" value={proj.title} onChange={(e) => updateProject(index, 'title', e.target.value)} disabled={isLocked} style={inputStyle} />
-                  <div style={{ display: 'flex', gap: '10px' }}>
-                    <input type="text" placeholder="Location" value={proj.location} onChange={(e) => updateProject(index, 'location', e.target.value)} disabled={isLocked} style={{...inputStyle, flex: 1}} />
-                    <input type="text" placeholder="Date" value={proj.date} onChange={(e) => updateProject(index, 'date', e.target.value)} disabled={isLocked} style={{...inputStyle, width: '100px'}} />
+                <div key={index} style={{ backgroundColor: '#F9FAFB', padding: '15px', borderRadius: '8px', border: '1px solid #E5E7EB', marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
+                    <div style={{ flex: 1 }}>
+                      <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Heading</label>
+                      <input type="text" placeholder="OPIGS: AI-Assisted Placement Portal | Self Project" value={proj.title} onChange={(e) => updateProject(index, 'title', e.target.value)} disabled={isLocked} style={{...inputStyle, width: '100%', boxSizing: 'border-box'}} />
+                    </div>
+
+                    <div style={{ width: '160px' }}>
+                      <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Date</label>
+                      <input type="text" placeholder="Apr '26 - Aug '26" value={proj.date} onChange={(e) => updateProject(index, 'date', e.target.value)} disabled={isLocked} style={{...inputStyle, width: '100%', boxSizing: 'border-box'}} />
+                    </div>
+
+                    {!isLocked && (
+                      <button onClick={() => removeProject(index)} title="Delete this project" style={{ height: '40px', padding: '0 12px', backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
+                    )}
                   </div>
-                  <textarea placeholder="One line overview..." value={proj.overview} onChange={(e) => updateProject(index, 'overview', e.target.value)} disabled={isLocked} style={{...inputStyle, resize: 'vertical', minHeight: '60px'}} />
+
+                  <div>
+                    <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>
+                      Overview <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(optional — leave blank to skip on the CV)</span>
+                    </label>
+                    <textarea
+                      placeholder="One line summarising the project."
+                      value={proj.overview}
+                      onChange={(e) => updateProject(index, 'overview', e.target.value)}
+                      disabled={isLocked}
+                      style={{...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', minHeight: '55px', marginTop: '4px'}} />
+                  </div>
+
+                  <div>
+                    <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Description</label>
+                    <RichEditor
+                      value={proj.description || ''}
+                      onChange={(html) => updateProject(index, 'description', html)}
+                      disabled={isLocked} />
+                  </div>
                 </div>
               ))}
             </div>

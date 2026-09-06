@@ -15,6 +15,9 @@ import os
 import jinja2
 import shutil
 from fastapi import UploadFile, File
+from ai import ask_gemini, ask_gemini_json
+
+
 
 app = FastAPI(title="OPIGS CV Generator API")
 UPLOAD_DIR = "uploads"
@@ -31,6 +34,116 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+LATEX_SPECIAL = {
+    "\\": r"\textbackslash{}",
+    "&": r"\&",
+    "%": r"\%",
+    "$": r"\$",
+    "#": r"\#",
+    "_": r"\_",
+    "{": r"\{",
+    "}": r"\}",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+
+UNICODE_MAP = {
+    "≤": r"$\leq$", "≥": r"$\geq$", "×": r"$\times$", "±": r"$\pm$",
+    "→": r"$\rightarrow$", "°": r"$^\circ$", "µ": r"$\mu$", "Ω": r"$\Omega$",
+    "α": r"$\alpha$", "β": r"$\beta$", "λ": r"$\lambda$", "∞": r"$\infty$",
+    "≈": r"$\approx$", "≠": r"$\neq$", "∑": r"$\sum$",
+    "—": "---", "–": "--", "•": r"$\bullet$",
+    "\u2018": "`", "\u2019": "'", "\u201c": "``", "\u201d": "''",
+    "\xa0": " ",
+}
+
+
+def latex_escape(text):
+    if text is None:
+        return ""
+    out = []
+    for ch in str(text):
+        if ch in LATEX_SPECIAL:
+            out.append(LATEX_SPECIAL[ch])
+        elif ch in UNICODE_MAP:
+            out.append(UNICODE_MAP[ch])
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def escape_payload(value):
+    if isinstance(value, str):
+        return latex_escape(value)
+    if isinstance(value, list):
+        return [escape_payload(v) for v in value]
+    if isinstance(value, dict):
+        return {k: escape_payload(v) for k, v in value.items()}
+    return value
+from html.parser import HTMLParser
+
+
+class HTMLToLatex(HTMLParser):
+    """Turns the editor's HTML into LaTeX the template can compile."""
+
+    WRAPPERS = {
+        "strong": r"\textbf{", "b": r"\textbf{",
+        "em": r"\textit{", "i": r"\textit{",
+        "u": r"\underline{",
+        "sup": r"\textsuperscript{", "sub": r"\textsubscript{",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.out = []
+        self.depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.WRAPPERS:
+            self.out.append(self.WRAPPERS[tag])
+        elif tag == "ul":
+            self.depth += 1
+            self.out.append("\n\\begin{itemize}[leftmargin=1.5em, label={$\\bullet$}, itemsep=0pt, parsep=0pt, topsep=1pt]\n")
+        elif tag == "ol":
+            self.depth += 1
+            self.out.append("\n\\begin{enumerate}[leftmargin=1.6em, itemsep=0pt, parsep=0pt, topsep=1pt]\n")
+        elif tag == "li":
+            self.out.append("  \\item ")
+        elif tag == "br":
+            self.out.append(" \\\\\n")
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+
+    def handle_endtag(self, tag):
+        if tag in self.WRAPPERS:
+            self.out.append("}")
+        elif tag == "ul":
+            self.depth -= 1
+            self.out.append("\\end{itemize}\n")
+        elif tag == "ol":
+            self.depth -= 1
+            self.out.append("\\end{enumerate}\n")
+        elif tag == "li":
+            self.out.append("\n")
+        elif tag == "p":
+            self.out.append(" " if self.depth else "\n\n")
+
+    def handle_data(self, data):
+        self.out.append(latex_escape(data))
+
+    def result(self):
+        return "".join(self.out).strip()
+
+
+def html_to_latex(html):
+    if not html or not html.strip():
+        return ""
+    parser = HTMLToLatex()
+    parser.feed(html)
+    return parser.result()
+
 # --- Define the Data Structure we expect from React ---
 class Education(BaseModel):
     year: str
@@ -43,9 +156,10 @@ class Experience(BaseModel):
     role: Optional[str] = None
     company: Optional[str] = None
     location: Optional[str] = None
-    date: str
-    overview: str
-    points: List[str]
+    date: str = ""
+    overview: str = ""
+    description: Optional[str] = ""
+    points: Optional[List[str]] = None   # legacy, kept so old saved profiles still load
 
 class CVData(BaseModel):
     name: str
@@ -90,7 +204,14 @@ async def generate_cv(
         raise HTTPException(status_code=500, detail="LaTeX template not found.")
 
     # 2. Inject React data into the template
-    payload = data.dict()
+    raw_payload = data.dict()
+    payload = escape_payload(raw_payload)
+
+    # URLs and file paths must stay unescaped — an escaped "_" would break them
+    payload["linkedin_url"] = raw_payload.get("linkedin_url", "")
+    for i, proj in enumerate(payload.get("projects", [])):
+        raw_desc = raw_payload["projects"][i].get("description") or ""
+        proj["description_tex"] = html_to_latex(raw_desc)
 
     profile = db.query(models.StudentProfile).filter(
         models.StudentProfile.user_id == user.id
@@ -99,7 +220,7 @@ async def generate_cv(
     if profile and profile.photo_filename and os.path.exists(profile.photo_filename):
         payload["photo_filename"] = profile.photo_filename
     else:
-        payload["photo_filename"] = "photo.jpg"   # fallback placeholder
+        payload["photo_filename"] = "photo.jpg"
 
     rendered_tex = template.render(payload)
 
@@ -398,3 +519,147 @@ def get_student_profile(
     if not profile:
         raise HTTPException(404, "Profile not found")
     return profile
+
+
+class MagicWriteIn(BaseModel):
+    title: str
+    notes: str
+    count: int = 3
+
+
+@app.post("/api/ai/magic-write")
+def magic_write(
+    data: MagicWriteIn,
+    user: models.User = Depends(get_current_user),
+):
+    if not data.notes.strip():
+        raise HTTPException(400, "Describe the project first")
+
+    count = max(1, min(data.count, 5))
+
+    prompt = f"""Turn a student's project description into CV bullet points.
+
+Rules:
+- Return exactly {count} bullets, one per line, each starting with "- "
+- Start each bullet with a strong past-tense action verb (Built, Designed, Implemented, Reduced, Automated)
+- Keep each bullet under 25 words
+- Each bullet must cover a DIFFERENT aspect: what was built, how it was built, what it achieved
+- Keep any numbers the student gave, but NEVER invent numbers, tools, or results
+- Plain text only. No markdown, no preamble
+
+Project title: {data.title}
+Description: {data.notes}"""
+
+    raw = ask_gemini(prompt)
+    bullets = [
+        line.lstrip("-•* ").strip()
+        for line in raw.split("\n")
+        if line.strip()
+    ]
+    return {"bullets": bullets[:count]}
+
+# ============ AI WRITING TOOLS ============
+
+POLISH_ACTIONS = {
+    "rephrase": "Rewrite it more clearly and professionally.",
+    "shorten":  "Make it noticeably shorter while keeping every fact.",
+    "impact":   "Rewrite it to open with a strong past-tense action verb and end with the result.",
+    "formal":   "Rewrite it in a formal technical register suitable for a CV.",
+}
+
+
+class PolishIn(BaseModel):
+    text: str
+    action: str
+
+
+@app.post("/api/ai/polish")
+def polish_text(
+    data: PolishIn,
+    user: models.User = Depends(get_current_user),
+):
+    instruction = POLISH_ACTIONS.get(data.action)
+    if not instruction:
+        raise HTTPException(400, "Unknown action")
+    if not data.text.strip():
+        raise HTTPException(400, "Select some text first")
+
+    prompt = f"""You edit sentences in an engineering student's CV.
+
+Task: {instruction}
+
+Rules:
+- Return ONLY the edited text. No quotes, no preamble, no explanation
+- Keep every technical term, tool name and number exactly as written
+- NEVER invent numbers, tools, or achievements
+- Keep it to roughly the same length unless asked to shorten
+
+Text:
+{data.text}"""
+
+    return {"text": ask_gemini(prompt).strip().strip('"')}
+
+
+class GrammarIn(BaseModel):
+    text: str
+
+
+@app.post("/api/ai/grammar")
+def check_grammar(
+    data: GrammarIn,
+    user: models.User = Depends(get_current_user),
+):
+    if len(data.text.strip()) < 10:
+        return {"issues": []}
+
+    prompt = f"""You are a proofreader for engineering CVs.
+
+Find spelling, grammar and style problems in the text below.
+
+Return ONLY a JSON object shaped exactly like this:
+{{"issues": [{{"original": "...", "suggestion": "...", "type": "spelling", "reason": "..."}}]}}
+
+Rules:
+- "original" MUST be copied character for character from the text so it can be found and replaced
+- Keep "original" short — just the words that need changing, not the whole sentence
+- "type" is one of: spelling, grammar, style
+- "reason" is at most 8 words
+- NEVER flag technical terms, tool names, libraries or acronyms as spelling errors.
+  FastAPI, SQLAlchemy, Jinja2, PyTorch, Kanban, JWT, LaTeX, npm are all correct.
+- Do not suggest changes that add facts or numbers
+- At most 8 issues. If the text is clean, return {{"issues": []}}
+
+Text:
+{data.text}"""
+
+    result = ask_gemini_json(prompt)
+    issues = result.get("issues", []) if isinstance(result, dict) else []
+    return {"issues": issues[:8]}
+
+
+class AutocompleteIn(BaseModel):
+    text: str
+
+
+@app.post("/api/ai/autocomplete")
+def autocomplete(
+    data: AutocompleteIn,
+    user: models.User = Depends(get_current_user),
+):
+    tail = data.text[-600:]
+    if len(tail.strip()) < 15:
+        return {"completion": ""}
+
+    prompt = f"""Continue the sentence a student is typing in a CV project description.
+
+Rules:
+- Return ONLY the continuation, between 3 and 10 words
+- Do not repeat words already written
+- Do not start a new sentence
+- NEVER invent numbers, tools, or results
+- Plain text only, no quotes
+
+Text so far:
+{tail}"""
+
+    return {"completion": ask_gemini(prompt).strip().strip('"')}

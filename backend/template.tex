@@ -71,16 +71,16 @@
 
 % ========================= CONDITIONAL: PROJECTS =========================
 <% if projects %>
-\cvsection{Project}
-<% for proj in projects %>
-\noindent\textbf{<< proj.title >> | << proj.location >>} \hfill \textbf{<< proj.date >>}\\
-\textit{Overview:} << proj.overview >>
-\begin{itemize}[leftmargin=1.5em, label={$\bullet$}, itemsep=0pt, parsep=0pt, topsep=1pt, partopsep=0pt]
-    <% for point in proj.points %>
-    \item << point >>
-    <% endfor %>
-\end{itemize}
-\vspace{1pt}
+\cvsection{Projects}
+<% for p in projects %>
+\noindent\textbf{<< p.title >>} \hfill \textbf{[<< p.date >>]}\\
+<% if p.overview %>
+\textit{Overview:} << p.overview >>
+<% endif %>
+<% if p.description_tex %>
+<< p.description_tex >>
+<% endif %>
+\vspace{2pt}
 <% endfor %>
 <% endif %>
 

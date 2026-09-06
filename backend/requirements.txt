@@ -6,3 +6,5 @@ pyjwt
 bcrypt
 pydantic[email]
 python-multipart
+google-genai
+python-dotenv
