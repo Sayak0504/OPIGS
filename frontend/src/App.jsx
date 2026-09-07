@@ -30,6 +30,7 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
+  const [chatMode, setChatMode] = useState('assistant');   // assistant | policy
   const chatEndRef = useRef(null);
   const [saveState, setSaveState] = useState('idle');   // idle | dirty | saving | saved | error
   const [saveError, setSaveError] = useState('');
@@ -188,7 +189,7 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages, chatBusy]);
 
-  const sendChat = async (preset) => {
+    const sendChat = async (preset) => {
     const text = (preset ?? chatInput).trim();
     if (!text || chatBusy) return;
 
@@ -198,11 +199,23 @@ function App() {
     setChatBusy(true);
 
     try {
-      const res = await api('/api/ai/chat', {
-        method: 'POST',
-        body: JSON.stringify({ messages: next }),
-      });
-      setChatMessages([...next, { role: 'assistant', content: res.reply }]);
+      if (chatMode === 'policy') {
+        const res = await api('/api/policy/ask', {
+          method: 'POST',
+          body: JSON.stringify({ question: text }),
+        });
+        setChatMessages([...next, {
+          role: 'assistant',
+          content: res.answer,
+          sources: res.sources || [],
+        }]);
+      } else {
+        const res = await api('/api/ai/chat', {
+          method: 'POST',
+          body: JSON.stringify({ messages: next.map(({ role, content }) => ({ role, content })) }),
+        });
+        setChatMessages([...next, { role: 'assistant', content: res.reply }]);
+      }
     } catch (err) {
       setChatMessages([...next, { role: 'assistant', content: `Sorry — ${err.message}` }]);
     }
@@ -757,14 +770,31 @@ function App() {
           {chatOpen && (
             <div style={{ width: '380px', height: '540px', backgroundColor: 'white', borderRadius: '12px', marginBottom: '16px', boxShadow: '0 10px 25px rgba(0,0,0,0.15)', display: 'flex', flexDirection: 'column', overflow: 'hidden', border: '1px solid #E5E7EB' }}>
 
-              <div style={{ backgroundColor: '#2563EB', color: 'white', padding: '14px 16px', fontWeight: 'bold', fontSize: '15px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span>🤖 Placement AI Assistant</span>
-                {chatMessages.length > 0 && (
-                  <button onClick={() => setChatMessages([])} title="Clear chat"
-                    style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', borderRadius: '4px', padding: '3px 9px', fontSize: '12px', cursor: 'pointer' }}>
-                    Clear
-                  </button>
-                )}
+              <div style={{ backgroundColor: '#2563EB', color: 'white', padding: '12px 14px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                  <span style={{ fontWeight: 'bold', fontSize: '15px' }}>🤖 Placement AI</span>
+                  {chatMessages.length > 0 && (
+                    <button onClick={() => setChatMessages([])} title="Clear chat"
+                      style={{ background: 'rgba(255,255,255,0.2)', color: 'white', border: 'none', borderRadius: '4px', padding: '3px 9px', fontSize: '12px', cursor: 'pointer' }}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+
+                <div style={{ display: 'flex', gap: '4px', background: 'rgba(0,0,0,0.18)', padding: '3px', borderRadius: '6px' }}>
+                  {[
+                    { key: 'assistant', label: '💬 Assistant' },
+                    { key: 'policy', label: '📖 Policy' },
+                  ].map((m) => (
+                    <button key={m.key}
+                      onClick={() => { setChatMode(m.key); setChatMessages([]); }}
+                      style={{ flex: 1, padding: '5px', fontSize: '12px', fontWeight: '600', border: 'none', borderRadius: '4px', cursor: 'pointer',
+                        backgroundColor: chatMode === m.key ? '#ffffff' : 'transparent',
+                        color: chatMode === m.key ? '#2563EB' : 'rgba(255,255,255,0.75)' }}>
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div style={{ flex: 1, padding: '14px', overflowY: 'auto', fontSize: '14px', backgroundColor: '#F9FAFB' }}>
@@ -772,16 +802,23 @@ function App() {
                 {chatMessages.length === 0 && (
                   <div>
                     <div style={{ backgroundColor: '#E0E7FF', padding: '12px', borderRadius: '10px', color: '#1E40AF', marginBottom: '14px', textAlign: 'left' }}>
-                      Hi {getName()}. Paste a project description and I'll turn it into CV bullet points, or ask me anything about placements.
+                      {chatMode === 'policy'
+                        ? `Hi ${getName()}. Ask me anything about the placement policy. I answer only from the official documents and show you the page.`
+                        : `Hi ${getName()}. Paste a project description and I'll turn it into CV bullet points, or ask me anything about placements.`}
                     </div>
 
                     <div style={{ fontSize: '12px', color: '#6B7280', marginBottom: '8px', textAlign: 'left' }}>Try:</div>
-                    {[
+                    {(chatMode === 'policy' ? [
+                      'Can I sit for more companies after I get an offer?',
+                      'What is the minimum CGPA to participate?',
+                      'What happens if I skip an interview?',
+                      'Can I decline a PPO?',
+                    ] : [
                       'Rate my CV out of 100 and tell me what to fix',
                       'Which companies are recruiting right now?',
                       'Which CV should I use for ',
                       'Turn this into 3 CV bullets: ',
-                    ].map((q) => (
+                    ]).map((q) => (
                       <div key={q}
                         onClick={() => (q.endsWith(' ') ? setChatInput(q) : sendChat(q))}
                         style={{ padding: '9px 11px', marginBottom: '7px', backgroundColor: 'white', border: '1px solid #E5E7EB', borderRadius: '8px', cursor: 'pointer', color: '#374151', fontSize: '13px', textAlign: 'left' }}>
@@ -826,7 +863,7 @@ function App() {
                       sendChat();
                     }
                   }}
-                  placeholder="Paste a project description, or ask..."
+                  placeholder={chatMode === 'policy' ? 'Ask about the placement policy...' : 'Paste a project description, or ask...'}
                   rows={2}
                   style={{ flex: 1, padding: '9px', border: '1px solid #D1D5DB', borderRadius: '6px', outline: 'none', resize: 'none', fontSize: '13px', fontFamily: 'inherit', boxSizing: 'border-box' }} />
 

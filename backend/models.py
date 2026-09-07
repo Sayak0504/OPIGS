@@ -63,3 +63,15 @@ class Application(Base):
     status     = Column(String, default="applied")   # applied | shortlisted | interviewing
     cv_name    = Column(String)
     applied_at = Column(DateTime, default=datetime.utcnow)
+
+
+class PolicyChunk(Base):
+    __tablename__ = "policy_chunks"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    doc_name   = Column(String, index=True)
+    page       = Column(Integer)
+    chunk_index = Column(Integer)
+    content    = Column(Text)
+    embedding  = Column(Text)      # the vector, stored as JSON
+    created_at = Column(DateTime, default=datetime.utcnow)

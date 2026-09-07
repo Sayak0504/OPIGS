@@ -1,7 +1,10 @@
+import re
 from routes_auth import router as auth_router
 from fastapi import Depends
 from sqlalchemy.orm import Session
 import models
+import rag
+from ai import embed_texts
 from database import engine, get_db
 from auth import get_current_user
 models.Base.metadata.create_all(bind=engine)
@@ -819,3 +822,131 @@ def ai_chat(
     )
 
     return {"reply": ask_gemini(prompt)}
+
+# ============ RAG POLICY BOT ============
+
+POLICY_DIR = "policies"
+os.makedirs(POLICY_DIR, exist_ok=True)
+
+
+@app.post("/api/policy/upload")
+async def upload_policy(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Only the placement cell can upload policy documents")
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(400, "Please upload a PDF")
+
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(400, "PDF must be under 10 MB")
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file.filename)
+    path = os.path.join(POLICY_DIR, safe_name)
+    with open(path, "wb") as out:
+        out.write(contents)
+
+    # replace any previous version of this document
+    db.query(models.PolicyChunk).filter(
+        models.PolicyChunk.doc_name == safe_name
+    ).delete()
+    db.commit()
+
+    chunks = rag.build_chunks(path, safe_name)
+    if not chunks:
+        raise HTTPException(400, "No readable text found — is this a scanned PDF?")
+
+    chunks = rag.embed_chunks(chunks)
+    for c in chunks:
+        db.add(models.PolicyChunk(**c))
+    db.commit()
+
+    return {"status": "success", "doc_name": safe_name, "chunks": len(chunks)}
+
+
+@app.get("/api/policy/documents")
+def list_policies(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    rows = db.query(models.PolicyChunk.doc_name).distinct().all()
+    return {"documents": [r[0] for r in rows]}
+
+
+@app.delete("/api/policy/{doc_name}")
+def delete_policy(
+    doc_name: str,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Only the placement cell can remove policy documents")
+
+    deleted = db.query(models.PolicyChunk).filter(
+        models.PolicyChunk.doc_name == doc_name
+    ).delete()
+    db.commit()
+    return {"status": "success", "removed_chunks": deleted}
+
+
+class PolicyAskIn(BaseModel):
+    question: str
+
+
+@app.post("/api/policy/ask")
+def ask_policy(
+    data: PolicyAskIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if not data.question.strip():
+        raise HTTPException(400, "Ask a question")
+
+    rows = db.query(models.PolicyChunk).all()
+    if not rows:
+        return {
+            "answer": "No placement policy documents have been uploaded yet, so I can't answer policy questions.",
+            "sources": [],
+        }
+
+    hits = rag.search(data.question, rows, top_k=5)
+    hits = [(r, s) for r, s in hits if s > 0.35]
+
+    if not hits:
+        return {
+            "answer": "I could not find anything about that in the placement policy documents.",
+            "sources": [],
+        }
+
+    passages = "\n\n".join(
+        f"[{i + 1}] ({r.doc_name}, page {r.page})\n{r.content}"
+        for i, (r, _) in enumerate(hits)
+    )
+
+    prompt = f"""Answer a student's question using ONLY the placement policy extracts below.
+
+Rules:
+- Answer from the extracts and nothing else. Do not use general knowledge about placements.
+- If the extracts do not contain the answer, say so plainly. Do not guess.
+- Cite the passage number in square brackets after each claim, like [2].
+- Be concise: three or four sentences.
+- Plain text only.
+
+EXTRACTS:
+{passages}
+
+QUESTION: {data.question}
+
+ANSWER:"""
+
+    return {
+        "answer": ask_gemini(prompt),
+        "sources": [
+            {"doc": r.doc_name, "page": r.page, "score": round(s, 3),
+             "preview": r.content[:180] + ("..." if len(r.content) > 180 else "")}
+            for r, s in hits
+        ],
+    }
