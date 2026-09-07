@@ -11,7 +11,7 @@ models.Base.metadata.create_all(bind=engine)
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import List, Optional
 import subprocess
 import os
@@ -19,7 +19,7 @@ import jinja2
 import shutil
 from fastapi import UploadFile, File
 from ai import ask_gemini, ask_gemini_json
-
+from auth import get_current_user, hash_password, verify_password
 
 
 app = FastAPI(title="OPIGS CV Generator API")
@@ -257,14 +257,32 @@ async def generate_cv(
 # --- Database API Routes ---
 
 @app.get("/api/notices")
-def get_notices(db: Session = Depends(get_db)):
-    notices = db.query(models.Notice).all()
-    return notices
+def get_notices(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    return (
+        db.query(models.Notice)
+        .order_by(models.Notice.id.desc())
+        .all()
+    )
+
 
 @app.get("/api/jobs")
-def get_jobs(db: Session = Depends(get_db)):
-    jobs = db.query(models.Job).all()
-    return jobs
+def get_jobs(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    q = db.query(models.Job)
+
+    if user.role == "admin":
+        pass                                        # admin sees everything
+    elif user.role == "recruiter":
+        q = q.filter(models.Job.company_name == user.company_name)
+    else:
+        q = q.filter(models.Job.status == "approved")   # students and alumni
+
+    return q.order_by(models.Job.id.desc()).all()
 
 @app.post("/api/student/save")
 def save_student_profile(
@@ -731,7 +749,7 @@ def build_portal_context(db, user):
     else:
         L.append("\n--- THEIR CV ---\nThe student has not filled in their CV at all yet.")
 
-    jobs = db.query(models.Job).all()
+    jobs = db.query(models.Job).filter(models.Job.status == "approved").all()
     if jobs:
         L.append("\n--- COMPANIES CURRENTLY RECRUITING ---")
         for j in jobs:
@@ -950,3 +968,603 @@ ANSWER:"""
             for r, s in hits
         ],
     }
+
+# ============ RECRUITER VIEW ============
+
+@app.get("/api/recruiter/applicants")
+def recruiter_applicants(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "recruiter":
+        raise HTTPException(403, "Recruiters only")
+    if not user.is_verified:
+        raise HTTPException(403, "Your account is awaiting institute approval")
+
+    jobs = db.query(models.Job).filter(
+        models.Job.company_name == user.company_name
+    ).all()
+    job_ids = [j.id for j in jobs]
+
+    if not job_ids:
+        return {"company": user.company_name, "jobs": [], "applicants": []}
+
+    rows = (
+        db.query(models.Application, models.StudentProfile, models.Job)
+        .join(models.StudentProfile, models.Application.user_id == models.StudentProfile.user_id)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .filter(models.Application.job_id.in_(job_ids))
+        .all()
+    )
+
+    return {
+        "company": user.company_name,
+        "jobs": [{"id": j.id, "role": j.role, "ctc": j.ctc} for j in jobs],
+        "applicants": [
+            {
+                "application_id": a.id,
+                "status": a.status,
+                "cv_name": a.cv_name,
+                "job_role": j.role,
+                "name": p.full_name,
+                "roll_number": p.roll_number,
+                "program": p.program,
+                "cgpa": p.cgpa,
+                "passing_year": p.passing_year,
+                "tech_skills": p.tech_skills,
+                "core_expertise": p.core_expertise,
+                "projects": [
+                    {"title": pr.get("title"), "overview": pr.get("overview"),
+                     "description": strip_html(pr.get("description", ""))}
+                    for pr in (p.projects or [])
+                ],
+            }
+            for a, p, j in rows
+        ],
+    }
+
+
+@app.patch("/api/recruiter/applicants/{application_id}")
+def recruiter_set_status(
+    application_id: int,
+    data: StatusIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "recruiter" or not user.is_verified:
+        raise HTTPException(403, "Recruiters only")
+    if data.status not in STAGES:
+        raise HTTPException(400, "Unknown stage")
+
+    row = (
+        db.query(models.Application)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .filter(
+            models.Application.id == application_id,
+            models.Job.company_name == user.company_name,
+        )
+        .first()
+    )
+    if not row:
+        raise HTTPException(404, "Application not found for your company")
+
+    row.status = data.status
+    db.commit()
+    return {"status": "success"}
+
+
+# ============ ALUMNI INTERVIEW BANK ============
+
+class ExperienceIn(BaseModel):
+    company_name: str
+    role: str
+    year: Optional[str] = ""
+    rounds: Optional[str] = ""
+    questions: str
+    advice: Optional[str] = ""
+    outcome: Optional[str] = ""
+
+
+@app.post("/api/experiences")
+def add_experience(
+    data: ExperienceIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "alumni":
+        raise HTTPException(403, "Only alumni can post interview experiences")
+    if not data.company_name.strip() or not data.questions.strip():
+        raise HTTPException(400, "Company and questions are required")
+
+    row = models.InterviewExperience(
+        user_id=user.id,
+        author_name=user.full_name,
+        **data.dict(),
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"status": "success", "id": row.id}
+
+
+@app.get("/api/experiences")
+def list_experiences(
+    company: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    q = db.query(models.InterviewExperience)
+    if company:
+        q = q.filter(models.InterviewExperience.company_name.ilike(f"%{company}%"))
+
+    if user.role != "admin":
+        # you always see your own; everyone else's must be approved
+        q = q.filter(
+            (models.InterviewExperience.status == "approved")
+            | (models.InterviewExperience.user_id == user.id)
+        )
+
+    rows = q.order_by(models.InterviewExperience.created_at.desc()).all()
+
+    return [
+        {
+            "id": r.id,
+            "author_name": r.author_name,
+            "company_name": r.company_name,
+            "role": r.role,
+            "year": r.year,
+            "rounds": r.rounds,
+            "questions": r.questions,
+            "advice": r.advice,
+            "outcome": r.outcome,
+            "status": r.status,
+            "reject_reason": r.reject_reason,
+            "mine": r.user_id == user.id,
+        }
+        for r in rows
+    ]
+
+
+@app.delete("/api/experiences/{exp_id}")
+def delete_experience(
+    exp_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    row = db.query(models.InterviewExperience).filter(
+        models.InterviewExperience.id == exp_id,
+        models.InterviewExperience.user_id == user.id,
+    ).first()
+    if not row:
+        raise HTTPException(404, "Not found")
+
+    db.delete(row)
+    db.commit()
+    return {"status": "success"}
+
+
+# ============ NOTICES (admin only) ============
+
+class NoticeIn(BaseModel):
+    title: str
+    content: str
+    category: str = "update"
+
+
+@app.post("/api/notices")
+def create_notice(
+    data: NoticeIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Only the placement cell can post notices")
+    if not data.title.strip() or not data.content.strip():
+        raise HTTPException(400, "Title and content are required")
+
+    row = models.Notice(
+        title=data.title.strip(),
+        content=data.content.strip(),
+        category=data.category,
+        created_by=user.id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"status": "success", "id": row.id}
+
+
+@app.delete("/api/notices/{notice_id}")
+def delete_notice(
+    notice_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Only the placement cell can remove notices")
+
+    row = db.query(models.Notice).filter(models.Notice.id == notice_id).first()
+    if not row:
+        raise HTTPException(404, "Notice not found")
+
+    db.delete(row)
+    db.commit()
+    return {"status": "success"}
+
+
+# ============ JOB POSTINGS ============
+
+class JobIn(BaseModel):
+    role: str
+    ctc: str
+    deadline: str
+    location: Optional[str] = ""
+    description: Optional[str] = ""
+    eligibility: Optional[str] = ""
+
+
+@app.post("/api/jobs")
+def create_job(
+    data: JobIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "recruiter":
+        raise HTTPException(403, "Only recruiters can post jobs")
+    if not user.is_verified:
+        raise HTTPException(403, "Your recruiter account is awaiting institute approval")
+    if not data.role.strip() or not data.ctc.strip():
+        raise HTTPException(400, "Role and CTC are required")
+
+    row = models.Job(
+        company_name=user.company_name,
+        posted_by=user.id,
+        status="pending",
+        **{k: (v or "").strip() for k, v in data.dict().items()},
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "status": "success",
+        "id": row.id,
+        "message": "Submitted. Students will see it once the placement cell approves it.",
+    }
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    q = db.query(models.Job).filter(models.Job.id == job_id)
+    if user.role == "recruiter":
+        q = q.filter(models.Job.company_name == user.company_name)
+    elif user.role != "admin":
+        raise HTTPException(403, "Not allowed")
+
+    row = q.first()
+    if not row:
+        raise HTTPException(404, "Job not found")
+
+    db.delete(row)
+    db.commit()
+    return {"status": "success"}
+
+
+class ModerateIn(BaseModel):
+    decision: str                       # approved | rejected
+    reason: Optional[str] = ""
+
+
+@app.get("/api/admin/jobs")
+def admin_list_jobs(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    q = db.query(models.Job)
+    if status:
+        q = q.filter(models.Job.status == status)
+    return q.order_by(models.Job.id.desc()).all()
+
+
+@app.patch("/api/admin/jobs/{job_id}")
+def admin_moderate_job(
+    job_id: int,
+    data: ModerateIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+    if data.decision not in ("approved", "rejected"):
+        raise HTTPException(400, "Decision must be approved or rejected")
+
+    row = db.query(models.Job).filter(models.Job.id == job_id).first()
+    if not row:
+        raise HTTPException(404, "Job not found")
+
+    row.status = data.decision
+    row.reject_reason = data.reason if data.decision == "rejected" else None
+    db.commit()
+    return {"status": "success"}
+
+
+# ============ MODERATED EXPERIENCES ============
+
+@app.get("/api/admin/experiences")
+def admin_list_experiences(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    q = db.query(models.InterviewExperience)
+    if status:
+        q = q.filter(models.InterviewExperience.status == status)
+    return q.order_by(models.InterviewExperience.id.desc()).all()
+
+
+@app.patch("/api/admin/experiences/{exp_id}")
+def admin_moderate_experience(
+    exp_id: int,
+    data: ModerateIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+    if data.decision not in ("approved", "rejected"):
+        raise HTTPException(400, "Decision must be approved or rejected")
+
+    row = db.query(models.InterviewExperience).filter(
+        models.InterviewExperience.id == exp_id
+    ).first()
+    if not row:
+        raise HTTPException(404, "Experience not found")
+
+    row.status = data.decision
+    row.reject_reason = data.reason if data.decision == "rejected" else None
+    db.commit()
+    return {"status": "success"}
+
+
+# ============ RECRUITER VERIFICATION ============
+
+@app.get("/api/admin/recruiters")
+def admin_list_recruiters(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    rows = db.query(models.User).filter(models.User.role == "recruiter").all()
+    return [
+        {"id": r.id, "full_name": r.full_name, "email": r.email,
+         "company_name": r.company_name, "is_verified": r.is_verified}
+        for r in rows
+    ]
+
+
+@app.patch("/api/admin/recruiters/{user_id}")
+def admin_verify_recruiter(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    row = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.role == "recruiter",
+    ).first()
+    if not row:
+        raise HTTPException(404, "Recruiter not found")
+
+    row.is_verified = not row.is_verified
+    db.commit()
+    return {"status": "success", "is_verified": row.is_verified}
+
+
+# ============ MESSAGES TO THE PLACEMENT CELL ============
+
+class MessageIn(BaseModel):
+    subject: str
+    body: str
+
+
+@app.post("/api/messages")
+def send_message(
+    data: MessageIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role == "admin":
+        raise HTTPException(400, "The placement cell is the recipient, not the sender")
+    if not data.subject.strip() or not data.body.strip():
+        raise HTTPException(400, "Subject and message are required")
+
+    row = models.AdminMessage(
+        from_user_id=user.id,
+        from_name=user.full_name,
+        from_role=user.role,
+        company_name=user.company_name,
+        subject=data.subject.strip(),
+        body=data.body.strip(),
+    )
+    db.add(row)
+    db.commit()
+    return {"status": "success", "message": "Sent to the placement cell."}
+
+
+@app.get("/api/messages")
+def my_messages(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    rows = (
+        db.query(models.AdminMessage)
+        .filter(models.AdminMessage.from_user_id == user.id)
+        .order_by(models.AdminMessage.id.desc())
+        .all()
+    )
+    return [
+        {"id": r.id, "subject": r.subject, "body": r.body,
+         "admin_reply": r.admin_reply, "is_read": r.is_read,
+         "created_at": str(r.created_at)}
+        for r in rows
+    ]
+
+
+@app.get("/api/admin/messages")
+def admin_inbox(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    rows = db.query(models.AdminMessage).order_by(models.AdminMessage.id.desc()).all()
+    return [
+        {"id": r.id, "from_name": r.from_name, "from_role": r.from_role,
+         "company_name": r.company_name, "subject": r.subject, "body": r.body,
+         "admin_reply": r.admin_reply, "is_read": r.is_read,
+         "created_at": str(r.created_at)}
+        for r in rows
+    ]
+
+
+class ReplyIn(BaseModel):
+    reply: str
+
+
+@app.patch("/api/admin/messages/{msg_id}")
+def admin_reply_message(
+    msg_id: int,
+    data: ReplyIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    row = db.query(models.AdminMessage).filter(models.AdminMessage.id == msg_id).first()
+    if not row:
+        raise HTTPException(404, "Message not found")
+
+    row.admin_reply = data.reply.strip()
+    row.is_read = True
+    db.commit()
+    return {"status": "success"}
+
+# ============ PASSWORD RESET ============
+
+import secrets
+from datetime import timedelta
+
+RESET_TTL_MINUTES = 30
+
+
+class ResetRequestIn(BaseModel):
+    email: EmailStr
+
+
+class ResetConfirmIn(BaseModel):
+    token: str
+    new_password: str
+
+
+@app.post("/api/auth/request-reset")
+def request_reset(
+    data: ResetRequestIn,
+    db: Session = Depends(get_db),
+):
+    user = db.query(models.User).filter(models.User.email == data.email).first()
+
+    # Always the same reply, whether or not the account exists.
+    generic = {"message": "If that account exists, the placement cell can now issue a reset code for it."}
+
+    if not user:
+        return generic
+
+    db.query(models.PasswordReset).filter(
+        models.PasswordReset.user_id == user.id,
+        models.PasswordReset.used_at.is_(None),
+    ).delete()
+
+    token = secrets.token_urlsafe(24)
+    db.add(models.PasswordReset(
+        user_id=user.id,
+        token_hash=hash_password(token),
+        expires_at=datetime.utcnow() + timedelta(minutes=RESET_TTL_MINUTES),
+    ))
+    db.commit()
+
+    print(f"[reset] token for {user.email}: {token}")
+    return generic
+
+
+@app.post("/api/auth/confirm-reset")
+def confirm_reset(
+    data: ResetConfirmIn,
+    db: Session = Depends(get_db),
+):
+    if len(data.new_password) < 6:
+        raise HTTPException(400, "Password must be at least 6 characters")
+
+    rows = db.query(models.PasswordReset).filter(
+        models.PasswordReset.used_at.is_(None),
+        models.PasswordReset.expires_at > datetime.utcnow(),
+    ).all()
+
+    match = next((r for r in rows if verify_password(data.token, r.token_hash)), None)
+    if not match:
+        raise HTTPException(400, "That reset code is invalid or has expired")
+
+    user = db.query(models.User).filter(models.User.id == match.user_id).first()
+    if not user:
+        raise HTTPException(400, "That reset code is invalid or has expired")
+
+    user.hashed_password = hash_password(data.new_password)
+    match.used_at = datetime.utcnow()
+    db.commit()
+
+    return {"status": "success", "message": "Password updated. You can log in now."}
+
+
+@app.post("/api/admin/issue-reset/{user_id}")
+def admin_issue_reset(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    target = db.query(models.User).filter(models.User.id == user_id).first()
+    if not target:
+        raise HTTPException(404, "User not found")
+
+    db.query(models.PasswordReset).filter(
+        models.PasswordReset.user_id == target.id,
+        models.PasswordReset.used_at.is_(None),
+    ).delete()
+
+    token = secrets.token_urlsafe(24)
+    db.add(models.PasswordReset(
+        user_id=target.id,
+        token_hash=hash_password(token),
+        expires_at=datetime.utcnow() + timedelta(minutes=RESET_TTL_MINUTES),
+    ))
+    db.commit()
+
+    return {"token": token, "email": target.email, "expires_in_minutes": RESET_TTL_MINUTES}

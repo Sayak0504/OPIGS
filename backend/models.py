@@ -18,19 +18,28 @@ class User(Base):
 class Notice(Base):
     __tablename__ = "notices"
 
-    id = Column(Integer, primary_key=True, index=True)
-    title = Column(String, index=True)
-    content = Column(Text)
-    category = Column(String) # e.g., "urgent", "update"
+    id         = Column(Integer, primary_key=True, index=True)
+    title      = Column(String, index=True)
+    content    = Column(Text)
+    category   = Column(String)          # urgent | update | event
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 class Job(Base):
     __tablename__ = "jobs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    company_name = Column(String, index=True)
-    role = Column(String)
-    ctc = Column(String)
-    deadline = Column(String)
+    id            = Column(Integer, primary_key=True, index=True)
+    company_name  = Column(String, index=True)
+    role          = Column(String)
+    ctc           = Column(String)
+    deadline      = Column(String)
+    location      = Column(String)
+    description   = Column(Text)
+    eligibility   = Column(Text)
+    posted_by     = Column(Integer, ForeignKey("users.id"), nullable=True)
+    status        = Column(String, default="pending", index=True)   # pending | approved | rejected
+    reject_reason = Column(Text)
+    created_at    = Column(DateTime, default=datetime.utcnow)
 
 
 class StudentProfile(Base):
@@ -74,4 +83,45 @@ class PolicyChunk(Base):
     chunk_index = Column(Integer)
     content    = Column(Text)
     embedding  = Column(Text)      # the vector, stored as JSON
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class InterviewExperience(Base):
+    __tablename__ = "interview_experiences"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    user_id      = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    author_name  = Column(String)
+    company_name = Column(String, index=True, nullable=False)
+    role         = Column(String, nullable=False)
+    year         = Column(String)
+    rounds       = Column(String)      # "2 technical, 1 HR"
+    questions    = Column(Text, nullable=False)
+    advice       = Column(Text)
+    outcome      = Column(String)      # selected | rejected | waitlisted
+    status        = Column(String, default="pending", index=True)
+    reject_reason = Column(Text)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+
+class AdminMessage(Base):
+    __tablename__ = "admin_messages"
+
+    id           = Column(Integer, primary_key=True, index=True)
+    from_user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    from_name    = Column(String)
+    from_role    = Column(String)
+    company_name = Column(String, nullable=True)
+    subject      = Column(String)
+    body         = Column(Text)
+    is_read      = Column(Boolean, default=False)
+    admin_reply  = Column(Text)
+    created_at   = Column(DateTime, default=datetime.utcnow)
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    token_hash = Column(String, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used_at    = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
