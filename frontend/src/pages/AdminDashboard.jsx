@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api, apiUpload, getName, logout } from '../api';
 
 const TABS = [
+  { key: 'analytics',   label: '📈 Analytics' },
   { key: 'notices',     label: '📌 Notices' },
   { key: 'jobs',        label: '💼 Job Approvals' },
   { key: 'experiences', label: '🎓 Experiences' },
@@ -16,7 +17,7 @@ const TABS = [
 const BLANK_NOTICE = { title: '', content: '', category: 'update' };
 
 export default function AdminDashboard() {
-  const [tab, setTab] = useState('notices');
+  const [tab, setTab] = useState('analytics');
   const [msg, setMsg] = useState(null);           // { kind, text }
 
   const [notices, setNotices] = useState([]);
@@ -31,6 +32,7 @@ export default function AdminDashboard() {
   const [openStudent, setOpenStudent] = useState(null);
   const [pipeline, setPipeline] = useState([]);
   const [deadline, setDeadline] = useState('');
+  const [stats, setStats] = useState(null);
   const [replyFor, setReplyFor] = useState(null);
   const [replyText, setReplyText] = useState('');
 
@@ -49,6 +51,7 @@ export default function AdminDashboard() {
     api('/api/admin/offers').then(setOffers).catch(fail);
     api('/api/admin/students').then(setStudents).catch(fail);
     api('/api/admin/pipeline').then(setPipeline).catch(fail);
+    api('/api/admin/analytics').then(setStats).catch(fail);
     api('/api/settings/cv-deadline').then((r) => setDeadline((r.deadline || '').slice(0, 16))).catch(fail);
     api('/api/policy/documents').then((r) => setDocs(r.documents || [])).catch(fail);
   };
@@ -393,6 +396,97 @@ export default function AdminDashboard() {
           ))}
         </>
       )}
+
+      {/* ---------------- ANALYTICS ---------------- */}
+      {tab === 'analytics' && (stats ? (<>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12, marginBottom: 18 }}>
+          {[
+            ['Students', stats.students_total, '#111827'],
+            ['Placed', stats.offers_accepted, '#10B981'],
+            ['Placement rate', `${stats.placement_rate}%`, '#2563EB'],
+            ['CVs complete', `${stats.profiles_complete}/${stats.students_total}`, '#F59E0B'],
+          ].map(([label, value, color]) => (
+            <div key={label} style={S.stat}>
+              <div style={{ fontSize: 25, fontWeight: 700, color }}>{value}</div>
+              <div style={S.statLabel}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <h2 style={S.h2}>Recruitment funnel</h2>
+          {(() => {
+            const max = Math.max(...Object.values(stats.funnel), 1);
+            const colors = { applied: '#3B82F6', shortlisted: '#F59E0B', interviewing: '#8B5CF6', offered: '#EC4899', hired: '#10B981', rejected: '#9CA3AF', declined: '#9CA3AF' };
+            return Object.entries(stats.funnel).map(([stage, n]) => (
+              <div key={stage} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+                <div style={{ width: 105, fontSize: 12.5, color: '#4B5563', textTransform: 'capitalize' }}>{stage}</div>
+                <div style={{ flex: 1, backgroundColor: '#F3F4F6', borderRadius: 5, height: 22, overflow: 'hidden' }}>
+                  <div style={{ width: `${(n / max) * 100}%`, height: '100%', backgroundColor: colors[stage], borderRadius: 5, transition: 'width .3s' }} />
+                </div>
+                <div style={{ width: 34, textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#111827' }}>{n}</div>
+              </div>
+            ));
+          })()}
+        </div>
+
+        <div style={S.card}>
+          <h2 style={S.h2}>Accepted packages (LPA)</h2>
+          {stats.packages.count === 0 ? (
+            <div style={S.empty}>No offers accepted yet.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+              {[['Highest', stats.packages.highest], ['Median', stats.packages.median],
+                ['Average', stats.packages.average], ['Lowest', stats.packages.lowest]].map(([l, v]) => (
+                <div key={l} style={{ ...S.stat, backgroundColor: '#F9FAFB' }}>
+                  <div style={{ fontSize: 22, fontWeight: 700, color: '#059669' }}>{v ?? '—'}</div>
+                  <div style={S.statLabel}>{l}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div style={{ ...S.meta, marginTop: 10, fontStyle: 'italic' }}>
+            Parsed from free-text CTC fields, so treat as indicative.
+          </div>
+        </div>
+
+        <div style={S.card}>
+          <h2 style={S.h2}>By branch</h2>
+          {stats.branches.length === 0 ? <div style={S.empty}>No students yet.</div> : stats.branches.map((b) => (
+            <div key={b.branch} style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 9 }}>
+              <div style={{ flex: 1, fontSize: 13, color: '#111827' }}>{b.branch}</div>
+              <div style={{ width: 150, backgroundColor: '#F3F4F6', borderRadius: 5, height: 18, overflow: 'hidden' }}>
+                <div style={{ width: `${b.students ? (b.placed / b.students) * 100 : 0}%`, height: '100%', backgroundColor: '#10B981' }} />
+              </div>
+              <div style={{ width: 74, textAlign: 'right', fontSize: 12.5, color: '#6B7280' }}>{b.placed}/{b.students} placed</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <h2 style={S.h2}>By company</h2>
+          {stats.companies.length === 0 ? <div style={S.empty}>No applications yet.</div> : stats.companies.map((c) => (
+            <div key={c.company} style={{ ...S.rowItem, marginTop: 8 }}>
+              <div>
+                <div style={{ fontWeight: 600, color: '#111827', fontSize: 14 }}>{c.company}</div>
+                <div style={S.meta}>{c.roles} role{c.roles > 1 ? 's' : ''}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: 13, color: '#4B5563' }}>{c.applications} applications</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#10B981' }}>{c.hired} hired</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={S.card}>
+          <h2 style={S.h2}>Portal health</h2>
+          <div style={S.meta}>{stats.jobs_approved} approved postings · {stats.jobs_pending} awaiting approval</div>
+          <div style={S.meta}>{stats.recruiters_verified} verified recruiters</div>
+          <div style={S.meta}>{stats.offers_accepted} offers accepted · {stats.offers_declined} declined</div>
+          <div style={S.meta}>{stats.students_closed} students no longer in the process</div>
+        </div>
+      </>) : <div style={S.empty}>Loading analytics...</div>)}
 
       {/* ---------------- PIPELINE ---------------- */}
       {tab === 'pipeline' && (<>

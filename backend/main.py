@@ -2104,3 +2104,84 @@ def set_cv_deadline(
     db.commit()
 
     return {"status": "success", "deadline": parsed.isoformat()}
+
+# ============ ANALYTICS ============
+
+@app.get("/api/admin/analytics")
+def admin_analytics(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    students = db.query(models.User).filter(models.User.role == "student").all()
+    total = len(students)
+    closed = [s for s in students if s.placement_status == "closed"]
+
+    accepted = db.query(models.Offer).filter(models.Offer.status == "accepted").all()
+    declined = db.query(models.Offer).filter(models.Offer.status == "declined").count()
+
+    # ---- funnel ----
+    funnel = {}
+    for st in ("applied", "shortlisted", "interviewing", "offered", "hired", "rejected", "declined"):
+        funnel[st] = db.query(models.Application).filter(models.Application.status == st).count()
+
+    # ---- per company ----
+    rows = (
+        db.query(models.Application, models.Job)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .all()
+    )
+    by_company = {}
+    for a, j in rows:
+        c = by_company.setdefault(j.company_name, {"company": j.company_name, "applications": 0, "hired": 0, "roles": set()})
+        c["applications"] += 1
+        c["roles"].add(j.role)
+        if a.status == "hired":
+            c["hired"] += 1
+    companies = sorted(
+        [{**c, "roles": len(c["roles"])} for c in by_company.values()],
+        key=lambda x: -x["applications"],
+    )
+
+    # ---- per branch ----
+    profiles = {p.user_id: p for p in db.query(models.StudentProfile).all()}
+    by_branch = {}
+    for s in students:
+        p = profiles.get(s.id)
+        branch = (p.program if p and p.program else "Not set").strip() or "Not set"
+        b = by_branch.setdefault(branch, {"branch": branch, "students": 0, "placed": 0})
+        b["students"] += 1
+        if s.placement_status == "closed" and any(o.student_user_id == s.id for o in accepted):
+            b["placed"] += 1
+    branches = sorted(by_branch.values(), key=lambda x: -x["students"])
+
+    # ---- CTC spread on accepted offers ----
+    def ctc_number(text):
+        m = re.search(r"(\d+(?:\.\d+)?)", text or "")
+        return float(m.group(1)) if m else None
+
+    packages = sorted(v for v in (ctc_number(o.ctc) for o in accepted) if v is not None)
+
+    return {
+        "students_total": total,
+        "students_closed": len(closed),
+        "offers_accepted": len(accepted),
+        "offers_declined": declined,
+        "placement_rate": round(100 * len(accepted) / total, 1) if total else 0,
+        "profiles_complete": sum(1 for s in students if (p := profiles.get(s.id)) and p.roll_number and p.tech_skills),
+        "jobs_approved": db.query(models.Job).filter(models.Job.status == "approved").count(),
+        "jobs_pending": db.query(models.Job).filter(models.Job.status == "pending").count(),
+        "recruiters_verified": db.query(models.User).filter(models.User.role == "recruiter", models.User.is_verified == True).count(),
+        "funnel": funnel,
+        "companies": companies,
+        "branches": branches,
+        "packages": {
+            "count": len(packages),
+            "highest": packages[-1] if packages else None,
+            "lowest": packages[0] if packages else None,
+            "median": packages[len(packages) // 2] if packages else None,
+            "average": round(sum(packages) / len(packages), 2) if packages else None,
+        },
+    }
