@@ -290,6 +290,10 @@ def save_student_profile(
     if user.role != "student":
         raise HTTPException(403, "Only students can save a CV profile")
 
+    dl = cv_deadline(db)
+    if datetime.now() > dl:
+        raise HTTPException(403, f"The CV submission deadline passed on {dl.strftime('%d %b %Y, %H:%M')}. Your CV is now locked.")
+
     # Someone else already claimed this roll number?
     clash = db.query(models.StudentProfile).filter(
         models.StudentProfile.roll_number == data.roll_number,
@@ -2043,3 +2047,60 @@ def publish_stage(
     db.add(notice)
     db.commit()
     return {"status": "success", "published": len(rolls)}
+
+# ============ SETTINGS ============
+
+DEFAULT_CV_DEADLINE = "2026-09-15T23:59:59"
+
+
+def get_setting(db, key, default=None):
+    row = db.query(models.Setting).filter(models.Setting.key == key).first()
+    return row.value if row and row.value else default
+
+
+def cv_deadline(db):
+    raw = get_setting(db, "cv_deadline", DEFAULT_CV_DEADLINE)
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.fromisoformat(DEFAULT_CV_DEADLINE)
+
+
+@app.get("/api/settings/cv-deadline")
+def read_cv_deadline(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    dl = cv_deadline(db)
+    return {
+        "deadline": dl.isoformat(),
+        "locked": datetime.now() > dl,
+    }
+
+
+class DeadlineIn(BaseModel):
+    deadline: str          # "2026-09-15T23:59"
+
+
+@app.put("/api/settings/cv-deadline")
+def set_cv_deadline(
+    data: DeadlineIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Only the placement cell can change the deadline")
+
+    try:
+        parsed = datetime.fromisoformat(data.deadline)
+    except ValueError:
+        raise HTTPException(400, "Use the format YYYY-MM-DDTHH:MM")
+
+    row = db.query(models.Setting).filter(models.Setting.key == "cv_deadline").first()
+    if not row:
+        row = models.Setting(key="cv_deadline")
+        db.add(row)
+    row.value = parsed.isoformat()
+    db.commit()
+
+    return {"status": "success", "deadline": parsed.isoformat()}

@@ -30,6 +30,7 @@ export default function AdminDashboard() {
   const [students, setStudents] = useState([]);
   const [openStudent, setOpenStudent] = useState(null);
   const [pipeline, setPipeline] = useState([]);
+  const [deadline, setDeadline] = useState('');
   const [replyFor, setReplyFor] = useState(null);
   const [replyText, setReplyText] = useState('');
 
@@ -48,6 +49,7 @@ export default function AdminDashboard() {
     api('/api/admin/offers').then(setOffers).catch(fail);
     api('/api/admin/students').then(setStudents).catch(fail);
     api('/api/admin/pipeline').then(setPipeline).catch(fail);
+    api('/api/settings/cv-deadline').then((r) => setDeadline((r.deadline || '').slice(0, 16))).catch(fail);
     api('/api/policy/documents').then((r) => setDocs(r.documents || [])).catch(fail);
   };
 
@@ -195,6 +197,27 @@ export default function AdminDashboard() {
       {/* ---------------- NOTICES ---------------- */}
       {tab === 'notices' && (
         <>
+          <div style={{ ...S.card, borderLeft: '4px solid #F59E0B' }}>
+            <h2 style={S.h2}>CV submission deadline</h2>
+            <p style={S.help}>
+              After this moment students can no longer edit or save their CV. Enforced by
+              the server, not just hidden in the interface.
+            </p>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="datetime-local" value={deadline}
+                onChange={(e) => setDeadline(e.target.value)}
+                style={{ ...S.input, width: 250, marginBottom: 0 }} />
+              <button onClick={async () => {
+                try {
+                  await api('/api/settings/cv-deadline', {
+                    method: 'PUT',
+                    body: JSON.stringify({ deadline }),
+                  });
+                  ok2('Deadline updated.');
+                } catch (e) { fail(e); }
+              }} style={S.primary}>Save deadline</button>
+            </div>
+          </div>        
           <div style={S.card}>
             <h2 style={S.h2}>Publish a notice</h2>
             <input value={notice.title} onChange={(e) => setNotice({ ...notice, title: e.target.value })}
@@ -500,7 +523,7 @@ export default function AdminDashboard() {
                 </div>
               ))}
             </>)}
-            
+
             {s.offers.length > 0 && (<>
               <div style={{ ...S.label, marginTop: 10 }}>Offers</div>
               {s.offers.map((o, i) => (

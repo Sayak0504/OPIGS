@@ -17,9 +17,9 @@ function App() {
   const [chatOpen, setChatOpen] = useState(false);
 
   // --- Admin Deadline Logic ---
-  // In a production app, this date would be fetched from the backend (Admin settings)
-  const CV_DEADLINE = new Date('2026-09-15T23:59:59'); 
-  const isLocked = new Date() > CV_DEADLINE;
+  const [deadline, setDeadline] = useState(null);
+  const isLocked = deadline ? new Date() > new Date(deadline) : false;
+  const CV_DEADLINE = deadline ? new Date(deadline) : null;
 
   // --- Database State ---
   const [notices, setNotices] = useState([]);
@@ -53,6 +53,7 @@ function App() {
     api('/api/my-offers').then(setOffers).catch(console.error);
     api('/api/experiences').then(setExperiences).catch(console.error);
     api('/api/my-placement').then(setPlacement).catch(console.error);
+    api('/api/settings/cv-deadline').then((r) => setDeadline(r.deadline)).catch(console.error);
 
     api('/api/student/me')
       .then((p) => {
@@ -644,13 +645,13 @@ function App() {
           <h2 style={pageHeaderStyle}>LaTeX CV Builder</h2>
           
           {/* Deadline Banner */}
-          {isLocked ? (
+          {!deadline ? null : isLocked ? (
             <div style={{ backgroundColor: '#FEE2E2', color: '#DC2626', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontWeight: 'bold', border: '1px solid #F87171' }}>
-              🔒 CV Editing is Locked. The deadline ({CV_DEADLINE.toDateString()}) has passed. You can only generate previews.
+              🔒 CV editing is locked. The deadline ({CV_DEADLINE.toLocaleString()}) has passed. You can still generate previews.
             </div>
           ) : (
             <div style={{ backgroundColor: '#FEF3C7', color: '#D97706', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontWeight: 'bold', border: '1px solid #FCD34D' }}>
-              ⏳ Deadline to finalize CV: {CV_DEADLINE.toDateString()}. The form will freeze after this date.
+              ⏳ Deadline to finalise your CV: {CV_DEADLINE.toLocaleString()}. The form freezes after this.
             </div>
           )}
 
