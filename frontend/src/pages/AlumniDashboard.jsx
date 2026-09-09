@@ -106,8 +106,12 @@ export default function AlumniDashboard() {
               </div>
               <div style={S.meta}>
                 {[x.year, x.rounds, x.outcome].filter(Boolean).join(' · ')}
+                {' · '}
+                <span style={{ fontWeight: 700, color: x.status === 'approved' ? '#166534' : x.status === 'rejected' ? '#B91C1C' : '#92400E' }}>
+                  {x.status === 'approved' ? 'published' : x.status === 'rejected' ? 'rejected' : 'awaiting review'}
+                </span>
               </div>
-            </div>
+              {x.reject_reason && <div style={{ ...S.text, color: '#B91C1C' }}>Reason: {x.reject_reason}</div>}            </div>
             <button onClick={() => remove(x.id)} style={S.remove}>Delete</button>
           </div>
 

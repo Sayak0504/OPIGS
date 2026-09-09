@@ -5,7 +5,11 @@ import RichEditor from './RichEditor';
 const STAGES = [
   { key: 'applied',      label: 'Applied',      color: '#3B82F6' },
   { key: 'shortlisted',  label: 'Shortlisted',  color: '#F59E0B' },
-  { key: 'interviewing', label: 'Interviewing', color: '#10B981' },
+  { key: 'interviewing', label: 'Interviewing', color: '#8B5CF6' },
+  { key: 'offered',      label: 'Offered',      color: '#EC4899' },
+  { key: 'hired',        label: 'Hired',        color: '#10B981' },
+  { key: 'rejected',     label: 'Not selected', color: '#9CA3AF' },
+  { key: 'declined',     label: 'Declined',     color: '#9CA3AF' },
 ];
 
 function App() {
@@ -31,6 +35,9 @@ function App() {
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const [chatMode, setChatMode] = useState('assistant');   // assistant | policy
+  const [offers, setOffers] = useState([]);
+  const [experiences, setExperiences] = useState([]);
+  const [placement, setPlacement] = useState({ placement_status: 'active' });
   const chatEndRef = useRef(null);
   const [saveState, setSaveState] = useState('idle');   // idle | dirty | saving | saved | error
   const [saveError, setSaveError] = useState('');
@@ -43,6 +50,9 @@ function App() {
     api('/api/jobs').then(setJobs).catch(console.error);
     loadPhoto();
     loadApplications();
+    api('/api/my-offers').then(setOffers).catch(console.error);
+    api('/api/experiences').then(setExperiences).catch(console.error);
+    api('/api/my-placement').then(setPlacement).catch(console.error);
 
     api('/api/student/me')
       .then((p) => {
@@ -272,7 +282,24 @@ function App() {
 
     const loadApplications = () =>
     api('/api/applications').then(setApplications).catch(console.error);
+  const respondToOffer = async (id, decision) => {
+    const label = decision === 'accepted' ? 'ACCEPT' : 'DECLINE';
+    if (!window.confirm(
+      `${label} this offer?\n\nUnder the one-offer rule this ends your participation in placements — whichever way you answer. This cannot be undone.`
+    )) return;
 
+    const note = window.prompt('Optional note to the company:') || '';
+    try {
+      const r = await api(`/api/my-offers/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ decision, note }),
+      });
+      alert(r.message);
+      api('/api/my-offers').then(setOffers);
+      api('/api/my-placement').then(setPlacement);
+      loadApplications();
+    } catch (e) { alert(e.message); }
+  };
   const applyToJob = async (jobId) => {
     try {
       const res = await api('/api/applications', {
@@ -419,6 +446,12 @@ function App() {
   const renderCompanies = () => (
     <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto' }}>
       <h2 style={pageHeaderStyle}>Active Recruitment Drives</h2>
+      {placement.placement_status === 'closed' && (
+        <div style={{ ...cardStyle, backgroundColor: '#F3F4F6', borderLeft: '4px solid #6B7280' }}>
+          <strong>Applications are closed for you.</strong>
+          <div style={{ marginTop: 6, color: '#4B5563' }}>{placement.closed_reason}</div>
+        </div>
+      )}
       {jobs.length === 0 ? <p style={{color: '#6B7280'}}>Loading jobs...</p> : jobs.map((job) => (
         <div key={job.id} style={{...cardStyle, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
           <div>
@@ -454,52 +487,135 @@ function App() {
     </div>
   );
 
+  const renderOffers = () => (
+    <div style={{ padding: '40px', maxWidth: '900px', margin: '0 auto' }}>
+      <h2 style={pageHeaderStyle}>My Offers</h2>
+
+      {placement.placement_status === 'closed' && (
+        <div style={{ ...cardStyle, backgroundColor: '#F3F4F6', borderLeft: '4px solid #6B7280' }}>
+          <strong>You are no longer in the placement process.</strong>
+          <div style={{ marginTop: 6, color: '#4B5563' }}>{placement.closed_reason}</div>
+        </div>
+      )}
+
+      {offers.length === 0 && <div style={{ ...cardStyle, color: '#6B7280' }}>No offers yet. Offers appear here once the placement cell approves them.</div>}
+
+      {offers.map((o) => (
+        <div key={o.id} style={{ ...cardStyle, borderLeft: `4px solid ${o.status === 'accepted' ? '#10B981' : o.status === 'declined' ? '#DC2626' : '#F59E0B'}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 20, color: '#111827' }}>{o.company_name}</h3>
+              <div style={{ color: '#4B5563', marginTop: 4 }}>{o.role}</div>
+            </div>
+            <span style={{ padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
+              backgroundColor: o.status === 'accepted' ? '#DCFCE7' : o.status === 'declined' ? '#FEE2E2' : '#FEF3C7',
+              color: o.status === 'accepted' ? '#166534' : o.status === 'declined' ? '#B91C1C' : '#92400E' }}>
+              {o.status === 'approved' ? 'awaiting your response' : o.status}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', gap: 20, marginTop: 12, color: '#6B7280', fontSize: 14, flexWrap: 'wrap' }}>
+            <span>💰 <strong>{o.ctc}</strong></span>
+            <span>📍 {o.location || '—'}</span>
+            <span>📅 Joining {o.joining_date || '—'}</span>
+          </div>
+
+          {o.details && <p style={{ color: '#4B5563', lineHeight: 1.6, marginTop: 12 }}>{o.details}</p>}
+
+          {o.status === 'approved' && (
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: '1px solid #E5E7EB' }}>
+              <div style={{ fontSize: 13, color: '#B45309', marginBottom: 12 }}>
+                ⚠️ Responding either way ends your participation in campus placements. This cannot be undone.
+              </div>
+              <button onClick={() => respondToOffer(o.id, 'accepted')}
+                style={{ padding: '11px 24px', backgroundColor: '#10B981', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer', marginRight: 10 }}>
+                ✓ Accept
+              </button>
+              <button onClick={() => respondToOffer(o.id, 'declined')}
+                style={{ padding: '11px 24px', backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: 8, fontWeight: 700, cursor: 'pointer' }}>
+                ✕ Decline
+              </button>
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+
+  const renderAlumni = () => (
+    <div style={{ padding: '40px', maxWidth: '900px', margin: '0 auto' }}>
+      <h2 style={pageHeaderStyle}>Alumni Interview Bank</h2>
+      <p style={{ color: '#6B7280', marginTop: -14, marginBottom: 22 }}>
+        Experiences shared by alumni, reviewed by the placement cell.
+      </p>
+
+      {experiences.length === 0 && <div style={{ ...cardStyle, color: '#6B7280' }}>Nothing published yet.</div>}
+
+      {experiences.map((x) => (
+        <div key={x.id} style={cardStyle}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 18, color: '#111827' }}>{x.company_name} — {x.role}</h3>
+              <div style={{ fontSize: 13, color: '#6B7280', marginTop: 4 }}>
+                {[x.author_name, x.year, x.rounds].filter(Boolean).join(' · ')}
+              </div>
+            </div>
+            {x.outcome && (
+              <span style={{ padding: '3px 11px', borderRadius: 12, fontSize: 11, fontWeight: 700, textTransform: 'uppercase',
+                backgroundColor: x.outcome === 'selected' ? '#DCFCE7' : '#F3F4F6',
+                color: x.outcome === 'selected' ? '#166534' : '#4B5563' }}>{x.outcome}</span>
+            )}
+          </div>
+
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 14 }}>Questions asked</div>
+          <div style={{ whiteSpace: 'pre-wrap', color: '#374151', lineHeight: 1.65, marginTop: 5 }}>{x.questions}</div>
+
+          {x.advice && (<>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 12 }}>Advice</div>
+            <div style={{ whiteSpace: 'pre-wrap', color: '#374151', lineHeight: 1.65, marginTop: 5 }}>{x.advice}</div>
+          </>)}
+        </div>
+      ))}
+    </div>
+  );
+
   const renderKanban = () => (
     <div style={{ padding: '40px' }}>
       <h2 style={pageHeaderStyle}>My Applications</h2>
+      <p style={{ color: '#6B7280', marginTop: -14, marginBottom: 22, fontSize: 14 }}>
+        Stages are updated by the recruiting company.
+      </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px', alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 16, alignItems: 'start' }}>
         {STAGES.map((stage) => {
           const items = applications.filter((a) => a.status === stage.key);
+          if (items.length === 0 && ['rejected', 'declined'].includes(stage.key)) return null;
 
           return (
-            <div
-              key={stage.key}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => moveCard(stage.key)}
-              style={{ backgroundColor: '#F3F4F6', borderRadius: '12px', padding: '16px', minHeight: '320px', border: '1px solid #E5E7EB' }}>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: stage.color }} />
-                <span style={{ fontWeight: '700', color: '#111827' }}>{stage.label}</span>
-                <span style={{ marginLeft: 'auto', backgroundColor: '#E5E7EB', color: '#4B5563', borderRadius: '10px', padding: '2px 9px', fontSize: '12px', fontWeight: '600' }}>
+            <div key={stage.key} style={{ backgroundColor: '#F3F4F6', borderRadius: 12, padding: 14, minHeight: 200, border: '1px solid #E5E7EB' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: stage.color }} />
+                <span style={{ fontWeight: 700, color: '#111827', fontSize: 14 }}>{stage.label}</span>
+                <span style={{ marginLeft: 'auto', backgroundColor: '#E5E7EB', color: '#4B5563', borderRadius: 10, padding: '2px 9px', fontSize: 12, fontWeight: 600 }}>
                   {items.length}
                 </span>
               </div>
 
-              {items.length === 0 && (
-                <p style={{ fontSize: '13px', color: '#9CA3AF', textAlign: 'center', marginTop: '30px' }}>
-                  Drag cards here
-                </p>
-              )}
+              {items.length === 0 && <p style={{ fontSize: 12.5, color: '#9CA3AF', textAlign: 'center', marginTop: 24 }}>—</p>}
 
               {items.map((a) => (
-                <div
-                  key={a.id}
-                  draggable
-                  onDragStart={() => setDragId(a.id)}
-                  style={{ backgroundColor: '#ffffff', borderRadius: '8px', padding: '14px', marginBottom: '12px', boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: `4px solid ${stage.color}`, cursor: 'grab', textAlign: 'left' }}>
+                <div key={a.id} style={{ backgroundColor: '#fff', borderRadius: 8, padding: 13, marginBottom: 11, boxShadow: '0 1px 3px rgba(0,0,0,0.08)', borderLeft: `4px solid ${stage.color}`, textAlign: 'left' }}>
+                  <h4 style={{ margin: '0 0 5px 0', fontSize: 15, color: '#111827' }}>{a.company_name}</h4>
+                  <div style={{ fontSize: 12.5, color: '#4B5563' }}>{a.role}</div>
+                  <div style={{ fontSize: 12.5, color: '#059669', fontWeight: 600, marginTop: 3 }}>{a.ctc}</div>
+                  <div style={{ fontSize: 11.5, color: '#6B7280', marginTop: 7 }}>📄 {a.cv_name}</div>
 
-                  <h4 style={{ margin: '0 0 6px 0', fontSize: '16px', color: '#111827' }}>{a.company_name}</h4>
-                  <div style={{ fontSize: '13px', color: '#4B5563' }}>{a.role}</div>
-                  <div style={{ fontSize: '13px', color: '#059669', fontWeight: '600', marginTop: '4px' }}>{a.ctc}</div>
-                  <div style={{ fontSize: '12px', color: '#6B7280', marginTop: '8px' }}>📄 {a.cv_name}</div>
-
-                  <button
-                    onClick={() => withdraw(a.id)}
-                    style={{ marginTop: '10px', padding: '4px 10px', fontSize: '12px', backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                    Withdraw
-                  </button>
+                  {a.status === 'applied' && (
+                    <button onClick={() => withdraw(a.id)}
+                      style={{ marginTop: 9, padding: '4px 10px', fontSize: 11.5, backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
+                      Withdraw
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -743,6 +859,12 @@ function App() {
           <div onClick={() => setActiveTab('cv_builder')} style={navItemStyle(activeTab === 'cv_builder')}>📝 CV Builder</div>
           <div onClick={() => setActiveTab('companies')} style={navItemStyle(activeTab === 'companies')}>🏢 Companies</div>
           <div onClick={() => setActiveTab('kanban')} style={navItemStyle(activeTab === 'kanban')}>📋 My Applications</div>
+          <div onClick={() => setActiveTab('offers')} style={navItemStyle(activeTab === 'offers')}>
+            🎁 Offers {offers.filter((o) => o.status === 'approved').length > 0 &&
+              <span style={{ backgroundColor: '#DC2626', color: '#fff', borderRadius: 10, padding: '1px 7px', fontSize: 11, fontWeight: 700 }}>
+                {offers.filter((o) => o.status === 'approved').length}</span>}
+          </div>
+          <div onClick={() => setActiveTab('alumni')} style={navItemStyle(activeTab === 'alumni')}>🎓 Alumni Bank</div>
         </div>
 
         {/* USER + LOGOUT */}
@@ -764,6 +886,8 @@ function App() {
         {activeTab === 'cv_builder' && renderCVBuilder()}
         {activeTab === 'companies' && renderCompanies()}
         {activeTab === 'kanban' && renderKanban()}
+        {activeTab === 'offers' && renderOffers()}
+        {activeTab === 'alumni' && renderAlumni()}
 
         {/* AI ASSISTANT */}
         <div style={{ position: 'fixed', bottom: '30px', right: '30px', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', zIndex: 1000 }}>

@@ -227,9 +227,6 @@ async def generate_cv(
 
     rendered_tex = template.render(payload)
 
-    # 3. Save to a temporary file
-    temp_filename = "output.tex"
-    pdf_filename = "output.pdf"
     
     with open(temp_filename, "w", encoding="utf-8") as file:
         file.write(rendered_tex)
@@ -417,7 +414,25 @@ def get_my_photo(
 
     return FileResponse(profile.photo_filename)
 
-STAGES = ("applied", "shortlisted", "interviewing")
+STAGES = ("applied", "shortlisted", "interviewing", "offered", "hired", "rejected", "declined")
+RECRUITER_SETTABLE = ("applied", "shortlisted", "interviewing", "rejected")
+STAGE_TITLES = {
+    "shortlisted":  "Shortlisted Candidates",
+    "interviewing": "Interview Shortlisted Candidates",
+    "offered":      "Offered Candidates",
+    "hired":        "Placed Candidates",
+}
+PUBLISHABLE = tuple(STAGE_TITLES)
+
+
+def log_event(db, application_id, from_status, to_status, actor_role):
+    db.add(models.ApplicationEvent(
+        application_id=application_id,
+        from_status=from_status,
+        to_status=to_status,
+        actor_role=actor_role,
+    ))
+CLOSED_STAGES = ("rejected", "declined")
 
 
 class ApplyIn(BaseModel):
@@ -437,6 +452,8 @@ def apply_to_job(
 ):
     if user.role != "student":
         raise HTTPException(403, "Only students can apply")
+    if user.placement_status == "closed":
+        raise HTTPException(403, f"You are no longer in the placement process. {user.closed_reason or ''}".strip())
 
     job = db.query(models.Job).filter(models.Job.id == data.job_id).first()
     if not job:
@@ -455,6 +472,8 @@ def apply_to_job(
         cv_name=data.cv_name or "Base_CV.pdf",
     )
     db.add(row)
+    db.flush()
+    log_event(db, row.id, None, "applied", "student")
     db.commit()
     return {"status": "success", "message": f"Applied to {job.company_name}"}
 
@@ -492,6 +511,7 @@ def move_application(
     db: Session = Depends(get_db),
     user: models.User = Depends(get_current_user),
 ):
+    raise HTTPException(403, "Application status is set by the recruiter and cannot be changed here")
     if data.status not in STAGES:
         raise HTTPException(400, "Unknown stage")
 
@@ -993,7 +1013,10 @@ def recruiter_applicants(
         db.query(models.Application, models.StudentProfile, models.Job)
         .join(models.StudentProfile, models.Application.user_id == models.StudentProfile.user_id)
         .join(models.Job, models.Application.job_id == models.Job.id)
-        .filter(models.Application.job_id.in_(job_ids))
+                .filter(
+            models.Application.job_id.in_(job_ids),
+            ~models.Application.status.in_(CLOSED_STAGES),
+        )
         .all()
     )
 
@@ -1003,6 +1026,8 @@ def recruiter_applicants(
         "applicants": [
             {
                 "application_id": a.id,
+                "student_user_id": a.user_id,
+                "placement_status": p_user.placement_status if (p_user := db.query(models.User).filter(models.User.id == a.user_id).first()) else "active",
                 "status": a.status,
                 "cv_name": a.cv_name,
                 "job_role": j.role,
@@ -1033,7 +1058,7 @@ def recruiter_set_status(
 ):
     if user.role != "recruiter" or not user.is_verified:
         raise HTTPException(403, "Recruiters only")
-    if data.status not in STAGES:
+    if data.status not in RECRUITER_SETTABLE:
         raise HTTPException(400, "Unknown stage")
 
     row = (
@@ -1048,6 +1073,7 @@ def recruiter_set_status(
     if not row:
         raise HTTPException(404, "Application not found for your company")
 
+    log_event(db, row.id, row.status, data.status, "recruiter")
     row.status = data.status
     db.commit()
     return {"status": "success"}
@@ -1469,7 +1495,7 @@ def admin_reply_message(
 # ============ PASSWORD RESET ============
 
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 RESET_TTL_MINUTES = 30
 
@@ -1568,3 +1594,452 @@ def admin_issue_reset(
     db.commit()
 
     return {"token": token, "email": target.email, "expires_in_minutes": RESET_TTL_MINUTES}
+
+
+# ============ OFFERS ============
+
+OFFER_OPEN = ("pending_admin", "approved")
+
+
+class OfferIn(BaseModel):
+    student_user_id: int
+    job_id: Optional[int] = None
+    role: str
+    ctc: str
+    location: Optional[str] = ""
+    joining_date: Optional[str] = ""
+    details: Optional[str] = ""
+
+
+def close_placement(db, student, reason):
+    student.placement_status = "closed"
+    student.closed_reason = reason
+    student.closed_at = datetime.utcnow()
+
+
+@app.post("/api/offers")
+def create_offer(
+    data: OfferIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "recruiter" or not user.is_verified:
+        raise HTTPException(403, "Verified recruiters only")
+
+    student = db.query(models.User).filter(
+        models.User.id == data.student_user_id,
+        models.User.role == "student",
+    ).first()
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    if student.placement_status == "closed":
+        raise HTTPException(400, "That student is no longer in the placement process")
+
+    # the student must actually have applied to one of your company's jobs
+    applied = (
+        db.query(models.Application)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .filter(
+            models.Application.user_id == student.id,
+            models.Job.company_name == user.company_name,
+        )
+        .first()
+    )
+    if not applied:
+        raise HTTPException(400, "That student has not applied to any of your postings")
+
+    existing = db.query(models.Offer).filter(
+        models.Offer.student_user_id == student.id,
+        models.Offer.company_name == user.company_name,
+        models.Offer.status.in_(OFFER_OPEN),
+    ).first()
+    if existing:
+        raise HTTPException(400, "You already have a live offer out to this student")
+
+    row = models.Offer(
+        student_user_id=student.id,
+        recruiter_user_id=user.id,
+        job_id=data.job_id,
+        company_name=user.company_name,
+        role=data.role.strip(),
+        ctc=data.ctc.strip(),
+        location=(data.location or "").strip(),
+        joining_date=(data.joining_date or "").strip(),
+        details=(data.details or "").strip(),
+        status="pending_admin",
+    )
+    db.add(row)
+    log_event(db, applied.id, applied.status, "offered", "recruiter")
+    applied.status = "offered"
+    db.commit()
+    return {"status": "success", "message": "Offer submitted. The placement cell must approve it before the student sees it."}
+
+
+@app.get("/api/recruiter/offers")
+def recruiter_offers(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "recruiter":
+        raise HTTPException(403, "Recruiters only")
+
+    rows = (
+        db.query(models.Offer, models.StudentProfile)
+        .outerjoin(models.StudentProfile, models.Offer.student_user_id == models.StudentProfile.user_id)
+        .filter(models.Offer.company_name == user.company_name)
+        .order_by(models.Offer.id.desc())
+        .all()
+    )
+    return [
+        {"id": o.id, "student": p.full_name if p else "(profile not filled)",
+         "roll_number": p.roll_number if p else "", "role": o.role, "ctc": o.ctc,
+         "status": o.status, "admin_reason": o.admin_reason,
+         "student_note": o.student_note, "created_at": str(o.created_at)}
+        for o, p in rows
+    ]
+
+
+@app.get("/api/admin/offers")
+def admin_offers(
+    status: Optional[str] = None,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    q = (
+        db.query(models.Offer, models.User, models.StudentProfile)
+        .join(models.User, models.Offer.student_user_id == models.User.id)
+        .outerjoin(models.StudentProfile, models.Offer.student_user_id == models.StudentProfile.user_id)
+    )
+    if status:
+        q = q.filter(models.Offer.status == status)
+
+    return [
+        {
+            "id": o.id, "company_name": o.company_name, "role": o.role, "ctc": o.ctc,
+            "location": o.location, "joining_date": o.joining_date, "details": o.details,
+            "status": o.status, "admin_reason": o.admin_reason, "student_note": o.student_note,
+            "created_at": str(o.created_at), "decided_at": str(o.decided_at) if o.decided_at else None,
+            "student_name": u.full_name, "student_email": u.email,
+            "roll_number": p.roll_number if p else "",
+            "program": p.program if p else "", "cgpa": p.cgpa if p else "",
+        }
+        for o, u, p in q.order_by(models.Offer.id.desc()).all()
+    ]
+
+
+@app.patch("/api/admin/offers/{offer_id}")
+def admin_moderate_offer(
+    offer_id: int,
+    data: ModerateIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    row = db.query(models.Offer).filter(models.Offer.id == offer_id).first()
+    if not row:
+        raise HTTPException(404, "Offer not found")
+    if row.status not in ("pending_admin",):
+        raise HTTPException(400, "This offer has already been decided")
+
+    if data.decision == "approved":
+        row.status = "approved"
+    elif data.decision == "rejected":
+        row.status = "rejected_by_admin"
+        row.admin_reason = data.reason
+    else:
+        raise HTTPException(400, "Decision must be approved or rejected")
+
+    db.commit()
+    return {"status": "success"}
+
+
+@app.get("/api/my-offers")
+def my_offers(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "student":
+        raise HTTPException(403, "Students only")
+
+    rows = (
+        db.query(models.Offer)
+        .filter(
+            models.Offer.student_user_id == user.id,
+            models.Offer.status != "pending_admin",       # never show unapproved offers
+            models.Offer.status != "rejected_by_admin",
+        )
+        .order_by(models.Offer.id.desc())
+        .all()
+    )
+    return [
+        {"id": o.id, "company_name": o.company_name, "role": o.role, "ctc": o.ctc,
+         "location": o.location, "joining_date": o.joining_date, "details": o.details,
+         "status": o.status, "created_at": str(o.created_at)}
+        for o in rows
+    ]
+
+
+class OfferResponseIn(BaseModel):
+    decision: str                       # accepted | declined
+    note: Optional[str] = ""
+
+
+@app.patch("/api/my-offers/{offer_id}")
+def respond_to_offer(
+    offer_id: int,
+    data: OfferResponseIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "student":
+        raise HTTPException(403, "Students only")
+    if data.decision not in ("accepted", "declined"):
+        raise HTTPException(400, "Decision must be accepted or declined")
+
+    row = db.query(models.Offer).filter(
+        models.Offer.id == offer_id,
+        models.Offer.student_user_id == user.id,
+        models.Offer.status == "approved",
+    ).first()
+    if not row:
+        raise HTTPException(404, "No open offer with that id")
+
+    row.status = data.decision
+    row.student_note = (data.note or "").strip()
+    row.decided_at = datetime.utcnow()
+    final = "hired" if data.decision == "accepted" else "declined"
+    for app_row in db.query(models.Application).filter(
+        models.Application.user_id == user.id,
+        models.Application.job_id == row.job_id,
+    ).all():
+        log_event(db, app_row.id, app_row.status, final, "student")
+        app_row.status = final
+
+    verb = "Accepted" if data.decision == "accepted" else "Declined"
+    close_placement(db, user, f"{verb} the offer from {row.company_name} ({row.role}).")
+
+    # any other live offer to this student is now void
+    db.query(models.Offer).filter(
+        models.Offer.student_user_id == user.id,
+        models.Offer.id != row.id,
+        models.Offer.status.in_(OFFER_OPEN),
+    ).update({"status": "rejected_by_admin",
+              "admin_reason": "Void — student left the placement process"},
+             synchronize_session=False)
+
+    db.commit()
+    return {
+        "status": "success",
+        "message": f"Offer {data.decision}. Under the one-offer rule you are no longer in the placement process.",
+    }
+
+
+@app.get("/api/my-placement")
+def my_placement(user: models.User = Depends(get_current_user)):
+    return {
+        "placement_status": user.placement_status or "active",
+        "closed_reason": user.closed_reason,
+    }
+
+
+# ============ ADMIN STUDENT DIRECTORY ============
+
+@app.get("/api/admin/students")
+def admin_students(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    students = db.query(models.User).filter(models.User.role == "student").all()
+    out = []
+
+    for s in students:
+        p = db.query(models.StudentProfile).filter(
+            models.StudentProfile.user_id == s.id
+        ).first()
+
+        app_rows = (
+            db.query(models.Application, models.Job)
+            .join(models.Job, models.Application.job_id == models.Job.id)
+            .filter(models.Application.user_id == s.id)
+            .all()
+        )
+        apps = len(app_rows)
+
+        journeys = []
+        for a, j in app_rows:
+            evs = (
+                db.query(models.ApplicationEvent)
+                .filter(models.ApplicationEvent.application_id == a.id)
+                .order_by(models.ApplicationEvent.id)
+                .all()
+            )
+            path, seen = [], None
+            for e in evs:
+                if e.to_status != seen:
+                    path.append(e.to_status)
+                    seen = e.to_status
+            if not path:
+                path = [a.status]
+            journeys.append({"company": j.company_name, "role": j.role,
+                             "path": path, "final": a.status})
+        offers = db.query(models.Offer).filter(
+            models.Offer.student_user_id == s.id,
+            models.Offer.status.in_(("approved", "accepted", "declined")),
+        ).all()
+
+        out.append({
+            "user_id": s.id,
+            "full_name": s.full_name,
+            "email": s.email,
+            "placement_status": s.placement_status or "active",
+            "closed_reason": s.closed_reason,
+            "profile_complete": bool(p and p.roll_number and p.tech_skills),
+            "roll_number": p.roll_number if p else "",
+            "program": p.program if p else "",
+            "degree": p.degree if p else "",
+            "cgpa": p.cgpa if p else "",
+            "passing_year": p.passing_year if p else "",
+            "phone": p.phone if p else "",
+            "tech_skills": p.tech_skills if p else "",
+            "core_expertise": p.core_expertise if p else "",
+            "project_count": len(p.projects or []) if p else 0,
+            "application_count": apps,
+            "journeys": journeys,
+            "offers": [{"company": o.company_name, "role": o.role, "ctc": o.ctc, "status": o.status} for o in offers],
+        })
+
+    return out
+
+
+@app.get("/api/admin/students/{user_id}")
+def admin_student_detail(
+    user_id: int,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    s = db.query(models.User).filter(
+        models.User.id == user_id, models.User.role == "student"
+    ).first()
+    if not s:
+        raise HTTPException(404, "Student not found")
+
+    p = db.query(models.StudentProfile).filter(models.StudentProfile.user_id == s.id).first()
+
+    apps = (
+        db.query(models.Application, models.Job)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .filter(models.Application.user_id == s.id)
+        .all()
+    )
+
+    return {
+        "user_id": s.id,
+        "full_name": s.full_name,
+        "email": s.email,
+        "placement_status": s.placement_status or "active",
+        "closed_reason": s.closed_reason,
+        "profile": None if not p else {
+            "roll_number": p.roll_number, "phone": p.phone, "program": p.program,
+            "degree": p.degree, "institute": p.institute, "passing_year": p.passing_year,
+            "cgpa": p.cgpa, "linkedin_url": p.linkedin_url,
+            "tech_skills": p.tech_skills, "core_expertise": p.core_expertise,
+            "projects": [
+                {"title": pr.get("title"), "date": pr.get("date"),
+                 "overview": pr.get("overview"),
+                 "description": strip_html(pr.get("description", ""))}
+                for pr in (p.projects or [])
+            ],
+        },
+        "applications": [
+            {"company": j.company_name, "role": j.role, "status": a.status, "cv_name": a.cv_name}
+            for a, j in apps
+        ],
+    }
+
+# ============ ADMIN PIPELINE ============
+
+@app.get("/api/admin/pipeline")
+def admin_pipeline(
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+
+    rows = (
+        db.query(models.Application, models.Job, models.StudentProfile, models.User)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .join(models.User, models.Application.user_id == models.User.id)
+        .outerjoin(models.StudentProfile, models.Application.user_id == models.StudentProfile.user_id)
+        .all()
+    )
+
+    grouped = {}
+    for a, j, p, u in rows:
+        g = grouped.setdefault(j.company_name, {"company_name": j.company_name, "total": 0, "stages": {}})
+        g["total"] += 1
+        g["stages"].setdefault(a.status, []).append({
+            "name": u.full_name,
+            "roll_number": p.roll_number if p else "",
+            "program": p.program if p else "",
+            "cgpa": p.cgpa if p else "",
+            "role": j.role,
+        })
+
+    return sorted(grouped.values(), key=lambda x: x["company_name"])
+
+
+class PublishStageIn(BaseModel):
+    company_name: str
+    stage: str
+
+
+@app.post("/api/admin/publish-stage")
+def publish_stage(
+    data: PublishStageIn,
+    db: Session = Depends(get_db),
+    user: models.User = Depends(get_current_user),
+):
+    if user.role != "admin":
+        raise HTTPException(403, "Admins only")
+    if data.stage not in PUBLISHABLE:
+        raise HTTPException(400, "Only shortlisted, interviewing, offered and hired lists can be published")
+
+    rows = (
+        db.query(models.Application, models.Job, models.StudentProfile)
+        .join(models.Job, models.Application.job_id == models.Job.id)
+        .outerjoin(models.StudentProfile, models.Application.user_id == models.StudentProfile.user_id)
+        .filter(
+            models.Job.company_name == data.company_name,
+            models.Application.status == data.stage,
+        )
+        .all()
+    )
+
+    if not rows:
+        raise HTTPException(400, "No students at that stage for this company")
+
+    rolls = sorted({(p.roll_number if p and p.roll_number else "—") for a, j, p in rows})
+    roles = sorted({j.role for a, j, p in rows})
+
+    notice = models.Notice(
+        title=f"{STAGE_TITLES[data.stage]} — {data.company_name} ({', '.join(roles)})",
+        content="\n".join(rolls),
+        category="update",
+        created_by=user.id,
+    )
+    db.add(notice)
+    db.commit()
+    return {"status": "success", "published": len(rolls)}

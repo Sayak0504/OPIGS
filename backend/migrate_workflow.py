@@ -16,6 +16,11 @@ NEW_COLUMNS = {
         "reject_reason": "TEXT",
         "created_at": "TIMESTAMP",
     },
+    "users": {
+        "placement_status": "TEXT",
+        "closed_reason": "TEXT",
+        "closed_at": "TIMESTAMP",
+    },
     "interview_experiences": {
         "status": "TEXT",
         "reject_reason": "TEXT",
@@ -49,6 +54,9 @@ with engine.begin() as conn:
     if "interview_experiences" in existing_tables:
         n = conn.execute(text("UPDATE interview_experiences SET status='approved' WHERE status IS NULL")).rowcount
         print(f"marked {n} existing experiences approved")
+    if "users" in existing_tables:
+        n = conn.execute(text("UPDATE users SET placement_status='active' WHERE placement_status IS NULL")).rowcount
+        print(f"marked {n} users active")
 
 models.Base.metadata.create_all(bind=engine)
 print("done")

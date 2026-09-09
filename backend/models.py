@@ -13,6 +13,9 @@ class User(Base):
     role            = Column(String, nullable=False)   # student | admin | recruiter | alumni
     company_name    = Column(String, nullable=True)    # recruiters only
     is_verified     = Column(Boolean, default=False)
+    placement_status = Column(String, default="active")   # active | closed
+    closed_reason    = Column(String, nullable=True)
+    closed_at        = Column(DateTime, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 class Notice(Base):
@@ -125,3 +128,36 @@ class PasswordReset(Base):
     expires_at = Column(DateTime, nullable=False)
     used_at    = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class Offer(Base):
+    __tablename__ = "offers"
+
+    id                = Column(Integer, primary_key=True, index=True)
+    student_user_id   = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    recruiter_user_id = Column(Integer, ForeignKey("users.id"), index=True)
+    job_id            = Column(Integer, ForeignKey("jobs.id"), nullable=True)
+
+    company_name      = Column(String, index=True)
+    role              = Column(String)
+    ctc               = Column(String)
+    location          = Column(String)
+    joining_date      = Column(String)
+    details           = Column(Text)
+
+    # pending_admin | approved | rejected_by_admin | accepted | declined
+    status            = Column(String, default="pending_admin", index=True)
+    admin_reason      = Column(Text)
+    student_note      = Column(Text)
+
+    created_at        = Column(DateTime, default=datetime.utcnow)
+    decided_at        = Column(DateTime, nullable=True)
+
+class ApplicationEvent(Base):
+    __tablename__ = "application_events"
+
+    id             = Column(Integer, primary_key=True, index=True)
+    application_id = Column(Integer, ForeignKey("applications.id"), index=True, nullable=False)
+    from_status    = Column(String)
+    to_status      = Column(String)
+    actor_role     = Column(String)
+    created_at     = Column(DateTime, default=datetime.utcnow)
