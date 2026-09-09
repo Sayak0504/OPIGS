@@ -148,6 +148,65 @@ def html_to_latex(html):
     return parser.result()
 
 # --- Define the Data Structure we expect from React ---
+SECTION_TYPES = {
+    "internships":        "Internships",
+    "projects":           "Projects",
+    "internships_projects": "Internships and Projects",
+    "academic":           "Academic Achievement",
+    "certification":      "Certification",
+    "training":           "Training",
+    "experience":         "Experience",
+    "entrepreneurial":    "Entrepreneurial Experience",
+    "competition":        "Competition/Conference",
+    "publication":        "Publication",
+    "responsibilities":   "Position of Responsibilities",
+    "extracurricular":    "Extra-Curricular Activities",
+    "skills":             "Skills and Expertise",
+    "coursework":         "Coursework Information",
+}
+
+
+def default_sections(profile):
+    """Build sections from the old fixed fields, for profiles saved before this change."""
+    out = []
+    if profile and profile.projects:
+        out.append({"type": "projects", "entries": profile.projects})
+    if profile and (profile.tech_skills or profile.core_expertise):
+        out.append({"type": "skills", "entries": [{
+            "tech_skills": profile.tech_skills or "",
+            "core_expertise": profile.core_expertise or "",
+        }]})
+    return out
+
+
+def sections_to_text(sections):
+    """Flatten sections into plain text for the AI context and recruiter views."""
+    lines = []
+    for s in sections or []:
+        label = SECTION_TYPES.get(s.get("type"), s.get("type", "Section"))
+        entries = s.get("entries") or []
+        if not entries:
+            continue
+        lines.append(f"{label}:")
+        for e in entries:
+            if s.get("type") == "skills":
+                if e.get("tech_skills"):
+                    lines.append(f"  Tools: {e['tech_skills']}")
+                if e.get("core_expertise"):
+                    lines.append(f"  Expertise: {e['core_expertise']}")
+                continue
+            head = e.get("title") or "Untitled"
+            if e.get("date"):
+                head += f"  [{e['date']}]"
+            lines.append(f"  * {head}")
+            if e.get("overview"):
+                lines.append(f"    {e['overview']}")
+            body = strip_html(e.get("description", ""))
+            for ln in body.split("\n"):
+                if ln:
+                    lines.append(f"    {ln}")
+    return "\n".join(lines)
+
 class Education(BaseModel):
     year: str
     degree: str
@@ -176,6 +235,7 @@ class CVData(BaseModel):
     education: List[Education]
     projects: List[Experience]
     internships: List[Experience]
+    sections: Optional[List[dict]] = None
     tech_skills: str
     core_expertise: str
 
@@ -215,6 +275,31 @@ async def generate_cv(
     for i, proj in enumerate(payload.get("projects", [])):
         raw_desc = raw_payload["projects"][i].get("description") or ""
         proj["description_tex"] = html_to_latex(raw_desc)
+    raw_sections = raw_payload.get("sections") or []
+    out_sections = []
+    for s in raw_sections:
+        stype = s.get("type")
+        entries = []
+        for e in (s.get("entries") or []):
+            if stype == "skills":
+                entries.append({
+                    "tech_skills": latex_escape(e.get("tech_skills", "")),
+                    "core_expertise": latex_escape(e.get("core_expertise", "")),
+                })
+            else:
+                entries.append({
+                    "title": latex_escape(e.get("title", "")),
+                    "date": latex_escape(e.get("date", "")),
+                    "overview": latex_escape(e.get("overview", "")),
+                    "description_tex": html_to_latex(e.get("description", "")),
+                })
+        if entries:
+            out_sections.append({
+                "type": stype,
+                "label": SECTION_TYPES.get(stype, stype or "Section"),
+                "entries": entries,
+            })
+    payload["sections"] = out_sections
 
     profile = db.query(models.StudentProfile).filter(
         models.StudentProfile.user_id == user.id
@@ -321,6 +406,7 @@ def save_student_profile(
     profile.tech_skills    = data.tech_skills
     profile.core_expertise = data.core_expertise
     profile.projects       = [p.dict() for p in data.projects]
+    profile.sections       = data.sections or []
 
     if data.education:
         edu = data.education[0]
@@ -343,7 +429,10 @@ def get_my_profile(
     ).first()
 
     if profile:
-        return profile
+        out = {c.name: getattr(profile, c.name) for c in profile.__table__.columns}
+        if not out.get("sections"):
+            out["sections"] = default_sections(profile)
+        return out
 
     # Nothing saved yet — prefill the form from the account
     return {
@@ -360,6 +449,7 @@ def get_my_profile(
         "linkedin_name": "",
         "tech_skills": "",
         "core_expertise": "",
+        "sections": [],
         "projects": [],
     }
 
@@ -757,19 +847,14 @@ def build_portal_context(db, user):
         L.append(f"Technical skills: {profile.tech_skills or 'NONE LISTED'}")
         L.append(f"Core expertise: {profile.core_expertise or 'NONE LISTED'}")
 
-        projects = profile.projects or []
-        if projects:
-            L.append(f"Projects ({len(projects)}):")
-            for p in projects:
-                L.append(f"  * {p.get('title') or 'Untitled'}  [{p.get('date') or 'no date'}]")
-                if p.get("overview"):
-                    L.append(f"    Overview: {p['overview']}")
-                body = strip_html(p.get("description", ""))
-                for ln in body.split("\n"):
-                    if ln:
-                        L.append(f"    {ln}")
+        secs = profile.sections or default_sections(profile)
+        body = sections_to_text(secs)
+        if body:
+            L.append("CV sections:")
+            for ln in body.split("\n"):
+                L.append(f"  {ln}")
         else:
-            L.append("Projects: NONE ADDED YET")
+            L.append("CV sections: NONE ADDED YET")
     else:
         L.append("\n--- THEIR CV ---\nThe student has not filled in their CV at all yet.")
 
@@ -1042,11 +1127,7 @@ def recruiter_applicants(
                 "passing_year": p.passing_year,
                 "tech_skills": p.tech_skills,
                 "core_expertise": p.core_expertise,
-                "projects": [
-                    {"title": pr.get("title"), "overview": pr.get("overview"),
-                     "description": strip_html(pr.get("description", ""))}
-                    for pr in (p.projects or [])
-                ],
+                "cv_body": sections_to_text(p.sections or default_sections(p)),
             }
             for a, p, j in rows
         ],
@@ -1959,12 +2040,7 @@ def admin_student_detail(
             "degree": p.degree, "institute": p.institute, "passing_year": p.passing_year,
             "cgpa": p.cgpa, "linkedin_url": p.linkedin_url,
             "tech_skills": p.tech_skills, "core_expertise": p.core_expertise,
-            "projects": [
-                {"title": pr.get("title"), "date": pr.get("date"),
-                 "overview": pr.get("overview"),
-                 "description": strip_html(pr.get("description", ""))}
-                for pr in (p.projects or [])
-            ],
+            "cv_body": sections_to_text(p.sections or default_sections(p)),
         },
         "applications": [
             {"company": j.company_name, "role": j.role, "status": a.status, "cv_name": a.cv_name}

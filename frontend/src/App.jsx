@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { api, apiBlob, apiUpload, getName, logout } from "./api";
+import SectionBuilder from './SectionBuilder';
 import RichEditor from './RichEditor';
 
 const STAGES = [
@@ -63,6 +64,7 @@ function App() {
         setPhone(p.phone || '');
         setSkills(p.tech_skills || '');
         setProjects(p.projects || []);
+        setSections(p.sections || []);
         setProgram(p.program || '');
         setDegree(p.degree || '');
         setInstitute(p.institute || '');
@@ -96,6 +98,7 @@ function App() {
   
   // Dynamic Projects Array
   const [projects, setProjects] = useState([]);
+  const [sections, setSections] = useState([]);
   
   const [pdfUrl, setPdfUrl] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -145,17 +148,11 @@ function App() {
     linkedin_name: linkedinName,
     photo_filename: "photo.jpg",
     education: [{ year: passingYear, degree: degree, institute: institute, score: cgpa }],
-    projects: projects
-      .filter(p => p.title.trim())
-      .map(p => ({
-        title: p.title,
-        date: p.date,
-        overview: (p.overview || '').trim(),
-        description: p.description || '',
-      })),
+    projects: [],
+    sections: sections,
     internships: [],
-    tech_skills: skills,
-    core_expertise: expertise
+    tech_skills: (sections.find(s => s.type === 'skills')?.entries?.[0]?.tech_skills) || '',
+    core_expertise: (sections.find(s => s.type === 'skills')?.entries?.[0]?.core_expertise) || '',
   });
 
   /* ---------- auto-save ---------- */
@@ -747,67 +744,11 @@ function App() {
               </div>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Core Expertise</label>
-              <input type="text" placeholder="Algorithms, Hardware Interfacing" value={expertise} onChange={(e) => setExpertise(e.target.value)} disabled={isLocked} style={inputStyle} />
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              <label style={{ fontSize: '14px', fontWeight: '600', color: '#374151' }}>Technical Skills</label>
-              <input type="text" value={skills} onChange={(e) => setSkills(e.target.value)} disabled={isLocked} style={inputStyle} />
-            </div>
-
-            {/* Dynamic Projects Section */}
-            <div style={{ marginTop: '10px', borderTop: '1px solid #E5E7EB', paddingTop: '15px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <h3 style={{ margin: 0, color: '#111827', fontSize: '18px' }}>Projects</h3>
-                {!isLocked && (
-                  <button onClick={addProject} style={{ padding: '6px 12px', backgroundColor: '#E0E7FF', color: '#4F46E5', border: 'none', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}>+ Add Project</button>
-                )}
-              </div>
-
-              {projects.map((proj, index) => (
-                <div key={index} style={{ backgroundColor: '#F9FAFB', padding: '15px', borderRadius: '8px', border: '1px solid #E5E7EB', marginBottom: '12px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-
-                  <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end' }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Heading</label>
-                      <input type="text" placeholder="OPIGS: AI-Assisted Placement Portal | Self Project" value={proj.title} onChange={(e) => updateProject(index, 'title', e.target.value)} disabled={isLocked} style={{...inputStyle, width: '100%', boxSizing: 'border-box'}} />
-                    </div>
-
-                    <div style={{ width: '160px' }}>
-                      <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Date</label>
-                      <input type="text" placeholder="Apr '26 - Aug '26" value={proj.date} onChange={(e) => updateProject(index, 'date', e.target.value)} disabled={isLocked} style={{...inputStyle, width: '100%', boxSizing: 'border-box'}} />
-                    </div>
-
-                    {!isLocked && (
-                      <button onClick={() => removeProject(index)} title="Delete this project" style={{ height: '40px', padding: '0 12px', backgroundColor: '#FEE2E2', color: '#DC2626', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}>✕</button>
-                    )}
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151' }}>
-                      Overview <span style={{ fontWeight: '400', color: '#9CA3AF' }}>(optional — leave blank to skip on the CV)</span>
-                    </label>
-                    <textarea
-                      placeholder="One line summarising the project."
-                      value={proj.overview}
-                      onChange={(e) => updateProject(index, 'overview', e.target.value)}
-                      disabled={isLocked}
-                      style={{...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', minHeight: '55px', marginTop: '4px'}} />
-                  </div>
-
-                  <div>
-                    <label style={{ fontSize: '13px', fontWeight: '600', color: '#374151', display: 'block', marginBottom: '4px' }}>Description</label>
-                    <RichEditor
-                      value={proj.description || ''}
-                      onChange={(html) => updateProject(index, 'description', html)}
-                      disabled={isLocked} />
-                  </div>
-                </div>
-              ))}
-            </div>
-            
+            <SectionBuilder
+              sections={sections}
+              setSections={setSections}
+              isLocked={isLocked}
+              inputStyle={inputStyle} />
             {/* Action Buttons */}
             <div style={{ display: 'flex', gap: '10px', marginTop: '15px' }}>
               <button 

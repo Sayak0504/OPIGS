@@ -21,6 +21,9 @@ NEW_COLUMNS = {
         "closed_reason": "TEXT",
         "closed_at": "TIMESTAMP",
     },
+    "student_profiles": {
+        "sections": "JSON",
+    },
     "interview_experiences": {
         "status": "TEXT",
         "reject_reason": "TEXT",

@@ -64,6 +64,7 @@ class StudentProfile(Base):
     tech_skills    = Column(Text)
     core_expertise = Column(Text)
     projects       = Column(JSON)
+    sections = Column(JSON)      # ordered list of CV sections
     photo_filename = Column(String)
 
 class Application(Base):

@@ -69,35 +69,30 @@
 <% endfor %>
 \end{tabularx}
 
-% ========================= CONDITIONAL: PROJECTS =========================
-<% if projects %>
-\cvsection{Projects}
-<% for p in projects %>
-\noindent\textbf{<< p.title >>} \hfill \textbf{[<< p.date >>]}\\
-<% if p.overview %>
-\textit{Overview:} << p.overview >>
+<% for s in sections %>
+\cvsection{<< s.label >>}
+<% if s.type == 'skills' %>
+<% for e in s.entries %>
+<% if e.tech_skills %>
+\noindent\textbf{Programming Languages \& Tools:} << e.tech_skills >>\\[2pt]
 <% endif %>
-<% if p.description_tex %>
-<< p.description_tex >>
+<% if e.core_expertise %>
+\noindent\textbf{Expertise:} << e.core_expertise >>
+<% endif %>
+<% endfor %>
+<% else %>
+<% for e in s.entries %>
+\noindent\textbf{<< e.title >>} \hfill \textbf{[<< e.date >>]}\\
+<% if e.overview %>
+\textit{Overview:} << e.overview >>
+<% endif %>
+<% if e.description_tex %>
+<< e.description_tex >>
 <% endif %>
 \vspace{2pt}
 <% endfor %>
 <% endif %>
-
-% ========================= CONDITIONAL: INTERNSHIPS =========================
-<% if internships %>
-\cvsection{Internships}
-<% for intern in internships %>
-\noindent\textbf{<< intern.role >> | << intern.company >>} \hfill \textbf{<< intern.date >>}\\
-\textit{Overview:} << intern.overview >>
-\begin{itemize}[leftmargin=1.5em, label={$\bullet$}, itemsep=0pt, parsep=0pt, topsep=1pt, partopsep=0pt]
-    <% for point in intern.points %>
-    \item << point >>
-    <% endfor %>
-\end{itemize}
-\vspace{1pt}
 <% endfor %>
-<% endif %>
 
 % ========================= SKILLS =========================
 \cvsection{Skills and Expertise}
