@@ -7,4 +7,5 @@ bcrypt
 pydantic[email]
 python-multipart
 google-genai
-python-dotenv
+python-dotenvnumpy
+pypdf
